@@ -31,8 +31,9 @@ async function connectToWhatsApp() {
         
         if (qr) {
             console.log('\n============== PERHATIAN ==============');
-            console.log('Silakan SCAN Barcode ini menggunakan WhatsApp (Linked Devices)');
-            qrcode.generate(qr, { small: true });
+            console.log('Barcode di layar ini terpotong oleh tulisan jam dari Render.');
+            console.log('Silakan BUKA / KLIK LINK di bawah ini untuk melihat Barcode secara utuh:');
+            console.log(`https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`);
             console.log('=======================================\n');
         }
 
