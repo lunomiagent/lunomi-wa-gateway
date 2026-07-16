@@ -1,5 +1,5 @@
 const express = require('express');
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 
@@ -13,12 +13,15 @@ let isConnected = false;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`[WA] Memakai versi v${version.join('.')}, isLatest: ${isLatest}`);
 
     sock = makeWASocket({
+        version,
         auth: state,
-        printQRInTerminal: false, // We'll handle QR manually to display it cleaner
+        printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ["Lunomi Hub", "Chrome", "1.0.0"],
+        browser: ["Mac OS", "Chrome", "121.0.0.0"], // Menyamar sebagai Chrome di Mac untuk menghindari blokir
     });
 
     sock.ev.on('creds.update', saveCreds);
