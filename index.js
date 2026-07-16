@@ -85,6 +85,58 @@ app.post('/send', async (req, res) => {
     }
 });
 
+// Helper for delay
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Endpoint untuk BROADCAST (CRM)
+app.post('/broadcast', async (req, res) => {
+    try {
+        if (!isConnected || !sock) {
+            return res.status(503).json({ error: 'WhatsApp Gateway belum siap / belum scan QR' });
+        }
+
+        const { targets, message } = req.body;
+        
+        if (!targets || !Array.isArray(targets) || targets.length === 0 || !message) {
+            return res.status(400).json({ error: 'Targets (array) atau Message tidak valid' });
+        }
+
+        // Respond immediately so we don't hold the HTTP connection
+        res.status(202).json({ success: true, message: `Menerima ${targets.length} nomor untuk antrean broadcast.` });
+
+        // Process in background
+        console.log(`[WA Gateway] Memulai broadcast ke ${targets.length} nomor...`);
+        for (let i = 0; i < targets.length; i++) {
+            try {
+                let target = targets[i];
+                let formattedTarget = target.replace(/[^0-9]/g, '');
+                if (formattedTarget.startsWith('0')) {
+                    formattedTarget = '62' + formattedTarget.substring(1);
+                }
+                formattedTarget = formattedTarget + '@s.whatsapp.net';
+
+                await sock.sendMessage(formattedTarget, { text: message });
+                console.log(`[WA Gateway Broadcast] ${i+1}/${targets.length} Terkirim ke ${target}`);
+
+                // Jeda acak antara 5-10 detik (5000 - 10000 ms) agar aman dari blokir SPAM Meta
+                if (i < targets.length - 1) {
+                    const randomDelay = Math.floor(Math.random() * (10000 - 5000 + 1)) + 5000;
+                    console.log(`[WA Gateway Broadcast] Jeda ${randomDelay}ms...`);
+                    await delay(randomDelay);
+                }
+            } catch (err) {
+                console.error(`[WA Gateway Broadcast] Gagal mengirim ke ${targets[i]}:`, err.message);
+            }
+        }
+        console.log(`[WA Gateway] Broadcast SELESAI.`);
+    } catch (error) {
+        console.error('[WA Gateway Broadcast Error]', error);
+        if (!res.headersSent) {
+            return res.status(500).json({ error: error.message });
+        }
+    }
+});
+
 // Endpoint untuk status/ping (berguna untuk Render Healthcheck)
 app.get('/', (req, res) => {
     res.send(isConnected ? 'Lunomi WA Gateway is ONLINE' : 'Lunomi WA Gateway is WAITING FOR QR SCAN');
