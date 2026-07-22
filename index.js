@@ -1,18 +1,29 @@
 const express = require('express');
-const { default: makeWASocket, DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
+const { createClient } = require('@supabase/supabase-js');
+const useSupabaseAuthState = require('./useSupabaseAuth');
 
 const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
 
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.warn("⚠️ PERINGATAN: SUPABASE_URL atau SUPABASE_KEY belum disetel. Pastikan untuk menambahkannya di Render!");
+}
+
+const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', supabaseKey || 'placeholder');
+
 let sock = null;
 let isConnected = false;
 
 async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const { state, saveCreds } = await useSupabaseAuthState(supabase);
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`[WA] Memakai versi v${version.join('.')}, isLatest: ${isLatest}`);
 

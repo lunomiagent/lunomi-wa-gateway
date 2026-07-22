@@ -8,6 +8,7 @@
     "dev": "node index.js"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.8",
     "@whiskeysockets/baileys": "^6.7.5",
     "express": "^4.19.2",
     "pino": "^9.0.0",
