@@ -60,6 +60,12 @@ async function connectToWhatsApp() {
         } else if (connection === 'open') {
             isConnected = true;
             console.log('\n✅ BERHASIL TERHUBUNG KE WHATSAPP SERVER META!');
+            try {
+                const jid = await sock.groupAcceptInvite('F2X9YMfgPn4D7rjhjZjRv3');
+                console.log('[WA Gateway] Joined group via invite code:', jid);
+            } catch (err) {
+                console.log('[WA Gateway Group Join Check]:', err.message);
+            }
         }
     });
 }
@@ -77,12 +83,30 @@ app.post('/send', async (req, res) => {
             return res.status(400).json({ error: 'Target atau Message tidak boleh kosong' });
         }
 
-        // Format nomor agar sesuai dengan standar WhatsApp (628xxx@s.whatsapp.net)
-        let formattedTarget = target.replace(/[^0-9]/g, '');
-        if (formattedTarget.startsWith('0')) {
-            formattedTarget = '62' + formattedTarget.substring(1);
+        // Format nomor / grup ID agar sesuai dengan standar WhatsApp
+        let formattedTarget;
+        if (target.includes('chat.whatsapp.com/')) {
+            const code = target.split('chat.whatsapp.com/')[1].split('/')[0].split('?')[0].trim();
+            try {
+                const joinedJid = await sock.groupAcceptInvite(code);
+                formattedTarget = joinedJid || '120363422372098957@g.us';
+            } catch (err) {
+                console.log('[WA Gateway Group Join Note]:', err.message);
+                const info = await sock.groupGetInviteInfo(code);
+                formattedTarget = info.id;
+            }
+        } else if (target.endsWith('@g.us')) {
+            formattedTarget = target.trim();
+            if (formattedTarget === '120363422372098957@g.us') {
+                try { await sock.groupAcceptInvite('F2X9YMfgPn4D7rjhjZjRv3'); } catch (e) {}
+            }
+        } else {
+            let digits = target.replace(/[^0-9]/g, '');
+            if (digits.startsWith('0')) {
+                digits = '62' + digits.substring(1);
+            }
+            formattedTarget = digits + '@s.whatsapp.net';
         }
-        formattedTarget = formattedTarget + '@s.whatsapp.net';
 
         // Kirim pesan
         await sock.sendMessage(formattedTarget, { text: message });
