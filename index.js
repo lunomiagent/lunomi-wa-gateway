@@ -90,16 +90,18 @@ app.post('/send', async (req, res) => {
             try {
                 const joinedJid = await sock.groupAcceptInvite(code);
                 formattedTarget = joinedJid || '120363422372098957@g.us';
+                await new Promise(r => setTimeout(r, 2000));
             } catch (err) {
                 console.log('[WA Gateway Group Join Note]:', err.message);
-                const info = await sock.groupGetInviteInfo(code);
-                formattedTarget = info.id;
+                try {
+                    const info = await sock.groupGetInviteInfo(code);
+                    formattedTarget = info.id;
+                } catch (e) {
+                    formattedTarget = '120363422372098957@g.us';
+                }
             }
         } else if (target.endsWith('@g.us')) {
             formattedTarget = target.trim();
-            if (formattedTarget === '120363422372098957@g.us') {
-                try { await sock.groupAcceptInvite('F2X9YMfgPn4D7rjhjZjRv3'); } catch (e) {}
-            }
         } else {
             let digits = target.replace(/[^0-9]/g, '');
             if (digits.startsWith('0')) {
@@ -107,6 +109,7 @@ app.post('/send', async (req, res) => {
             }
             formattedTarget = digits + '@s.whatsapp.net';
         }
+
 
         // Kirim pesan
         await sock.sendMessage(formattedTarget, { text: message });
