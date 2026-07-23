@@ -111,11 +111,20 @@ app.post('/send', async (req, res) => {
         }
 
 
+        if (formattedTarget.endsWith('@g.us')) {
+            try {
+                await sock.groupMetadata(formattedTarget);
+            } catch (e) {
+                console.log('[WA Gateway Group Metadata Note]:', e.message);
+            }
+        }
+
         // Kirim pesan
-        await sock.sendMessage(formattedTarget, { text: message });
+        const sentMsg = await sock.sendMessage(formattedTarget, { text: message });
         
-        console.log(`[WA Gateway] Pesan terkirim ke ${target}`);
-        return res.status(200).json({ success: true, message: `Berhasil mengirim ke ${target}` });
+        console.log(`[WA Gateway] Pesan terkirim ke ${target}`, sentMsg?.key);
+        return res.status(200).json({ success: true, message: `Berhasil mengirim ke ${target}`, key: sentMsg?.key });
+
 
     } catch (error) {
         console.error('[WA Gateway Error]', error);
