@@ -33,7 +33,11 @@ async function connectToWhatsApp() {
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: ["Mac OS", "Chrome", "121.0.0.0"], // Menyamar sebagai Chrome di Mac untuk menghindari blokir
+        options: {
+            timeout: 60000
+        }
     });
+
 
     sock.ev.on('creds.update', saveCreds);
 
