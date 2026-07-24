@@ -21,6 +21,7 @@ const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', 
 
 let sock = null;
 let isConnected = false;
+let currentQR = null;
 
 async function connectToWhatsApp() {
     const { state, saveCreds } = await useSupabaseAuthState(supabase);
@@ -38,13 +39,13 @@ async function connectToWhatsApp() {
         }
     });
 
-
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect, qr } = update;
         
         if (qr) {
+            currentQR = qr;
             console.log('\n============== PERHATIAN ==============');
             console.log('Barcode di layar ini terpotong oleh tulisan jam dari Render.');
             console.log('Silakan BUKA / KLIK LINK di bawah ini untuk melihat Barcode secara utuh:');
@@ -63,6 +64,8 @@ async function connectToWhatsApp() {
             }
         } else if (connection === 'open') {
             isConnected = true;
+            currentQR = null;
+
             console.log('\n✅ BERHASIL TERHUBUNG KE WHATSAPP SERVER META!');
             try {
                 const jid = await sock.groupAcceptInvite('F2X9YMfgPn4D7rjhjZjRv3');
@@ -188,14 +191,51 @@ app.post('/broadcast', async (req, res) => {
     }
 });
 
-// Endpoint untuk status/ping (berguna untuk Render Healthcheck)
+// Endpoint status & QR Scan
+app.get('/qr', (req, res) => {
+    if (isConnected) {
+        return res.send(`
+            <div style="text-align: center; font-family: sans-serif; padding: 40px;">
+                <h2 style="color: #10b981;">✅ WhatsApp Gateway ONLINE & Terhubung!</h2>
+                <p>Status: Active & Ready to send messages</p>
+            </div>
+        `);
+    }
+    if (!currentQR) {
+        return res.send(`
+            <div style="text-align: center; font-family: sans-serif; padding: 40px;">
+                <h2>⏳ Memuat QR Code WhatsApp...</h2>
+                <p>Silakan refresh halaman ini dalam beberapa detik.</p>
+                <script>setTimeout(() => location.reload(), 3000);</script>
+            </div>
+        `);
+    }
+    const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(currentQR)}`;
+    return res.send(`
+        <div style="text-align: center; font-family: sans-serif; padding: 40px;">
+            <h2>📱 Scan QR Code WhatsApp Gateway</h2>
+            <p>Buka WhatsApp di HP ➔ Perangkat Tertaut (Linked Devices) ➔ Tautkan Perangkat</p>
+            <img src="${qrImageUrl}" alt="QR Code WhatsApp Gateway" style="border: 4px solid #10b981; border-radius: 12px; padding: 12px; margin: 15px 0;" />
+            <p style="color: #666; margin-top: 10px;">Halaman ini akan otomatis me-refresh jika terhubung.</p>
+            <script>setTimeout(() => location.reload(), 4000);</script>
+        </div>
+    `);
+});
+
+app.get('/status', (req, res) => {
+    res.json({ isConnected, hasQR: !!currentQR });
+});
+
 app.get('/', (req, res) => {
-    res.send(isConnected ? 'Lunomi WA Gateway is ONLINE' : 'Lunomi WA Gateway is WAITING FOR QR SCAN');
+    if (isConnected) {
+        res.send('Lunomi WA Gateway is ONLINE');
+    } else {
+        res.redirect('/qr');
+    }
 });
 
 // Mulai API Server
 app.listen(PORT, () => {
     console.log(`🚀 WA Gateway API berjalan di http://localhost:${PORT}`);
-    // Mulai koneksi ke WhatsApp
     connectToWhatsApp();
-});
+});
