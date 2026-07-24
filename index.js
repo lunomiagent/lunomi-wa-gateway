@@ -92,10 +92,10 @@ app.post('/send', async (req, res) => {
             return res.status(503).json({ error: 'WhatsApp Gateway belum siap / belum scan QR' });
         }
 
-        const { target, message } = req.body;
+        const { target, message, imageUrl } = req.body;
         
-        if (!target || !message) {
-            return res.status(400).json({ error: 'Target atau Message tidak boleh kosong' });
+        if (!target || (!message && !imageUrl)) {
+            return res.status(400).json({ error: 'Target dan konten (Message atau Image) tidak boleh kosong' });
         }
 
         // Format nomor / grup ID agar sesuai dengan standar WhatsApp
@@ -135,7 +135,15 @@ app.post('/send', async (req, res) => {
         }
 
         // Kirim pesan
-        const sentMsg = await sock.sendMessage(formattedTarget, { text: message });
+        let sentMsg;
+        if (imageUrl) {
+            sentMsg = await sock.sendMessage(formattedTarget, { 
+                image: { url: imageUrl }, 
+                caption: message || '' 
+            });
+        } else {
+            sentMsg = await sock.sendMessage(formattedTarget, { text: message });
+        }
         
         console.log(`[WA Gateway] Pesan terkirim ke ${target}`, sentMsg?.key);
         return res.status(200).json({ success: true, message: `Berhasil mengirim ke ${target}`, key: sentMsg?.key });
@@ -246,4 +254,4 @@ app.get('/', (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 WA Gateway API berjalan di http://localhost:${PORT}`);
     connectToWhatsApp();
-});
+});
