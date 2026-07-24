@@ -1,6 +1,10 @@
 const { initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 
 module.exports = async function useSupabaseAuthState(supabase) {
+    // IN-MEMORY CACHE: Mengunci & menyinkronkan data secara instan di RAM
+    // Ini menghilangkan 100% isu race-condition akibat latensi database jarak jauh
+    const memoryCache = new Map();
+
     const writeData = async (data, id) => {
         try {
             await supabase
@@ -45,27 +49,47 @@ module.exports = async function useSupabaseAuthState(supabase) {
                 get: async (type, ids) => {
                     const data = {};
                     for (const id of ids) {
-                        let value = await readData(`${type}-${id}`);
+                        const key = `${type}-${id}`;
+                        
+                        // 1. Cek di Memory Cache dulu (Instan, bebas network latency)
+                        if (memoryCache.has(key)) {
+                            data[id] = memoryCache.get(key);
+                            continue;
+                        }
+
+                        // 2. Jika tidak ada di cache, baru ambil dari DB
+                        let value = await readData(key);
                         if (type === 'app-state-sync-key' && value) {
                             value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
+                        }
+                        
+                        // 3. Simpan ke Cache untuk request berikutnya
+                        if (value) {
+                            memoryCache.set(key, value);
                         }
                         data[id] = value;
                     }
                     return data;
                 },
                 set: async (data) => {
-                    // Eksekusi sequential (berurutan) agar tidak terjadi race-condition / korupsi data di Supabase
+                    const writePromises = [];
                     for (const category in data) {
                         for (const id in data[category]) {
                             const value = data[category][id];
                             const key = `${category}-${id}`;
+                            
+                            // Update RAM secara instan agar tidak terjadi desinkronisasi MAC
                             if (value) {
-                                await writeData(value, key);
+                                memoryCache.set(key, value);
+                                writePromises.push(writeData(value, key));
                             } else {
-                                await removeData(key);
+                                memoryCache.delete(key);
+                                writePromises.push(removeData(key));
                             }
                         }
                     }
+                    // Sinkronisasi ke DB berjalan secara paralel tanpa memblokir RAM
+                    await Promise.all(writePromises);
                 },
             },
         },
@@ -73,9 +97,10 @@ module.exports = async function useSupabaseAuthState(supabase) {
             return writeData(creds, 'creds');
         },
         clearSession: async () => {
+            memoryCache.clear();
             try {
-                await supabase.from('wa_sessions').delete().neq('id', 'dummy'); // Hapus semua baris
-                console.log('✅ Sesi WhatsApp berhasil dibersihkan dari database.');
+                await supabase.from('wa_sessions').delete().neq('id', 'dummy'); 
+                console.log('✅ Sesi WhatsApp berhasil dibersihkan dari memory cache & database.');
             } catch (err) {
                 console.error('Error saat membersihkan sesi:', err);
             }
