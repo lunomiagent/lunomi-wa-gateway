@@ -1,10 +1,7 @@
-const { initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { initAuthCreds, BufferJSON, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 
 module.exports = async function useSupabaseAuthState(supabase) {
-    // IN-MEMORY CACHE: Mengunci & menyinkronkan data secara instan di RAM
-    // Ini menghilangkan 100% isu race-condition akibat latensi database jarak jauh
-    const memoryCache = new Map();
-
     const writeData = async (data, id) => {
         try {
             await supabase
@@ -42,65 +39,53 @@ module.exports = async function useSupabaseAuthState(supabase) {
 
     const creds = (await readData('creds')) || initAuthCreds();
 
+    // 1. Buat custom Supabase Store untuk operasi baca-tulis mentah
+    const supabaseStore = {
+        get: async (type, ids) => {
+            const data = {};
+            for (const id of ids) {
+                let value = await readData(`${type}-${id}`);
+                if (type === 'app-state-sync-key' && value) {
+                    value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
+                }
+                data[id] = value;
+            }
+            return data;
+        },
+        set: async (data) => {
+            const writePromises = [];
+            for (const category in data) {
+                for (const id in data[category]) {
+                    const value = data[category][id];
+                    const key = `${category}-${id}`;
+                    if (value) {
+                        writePromises.push(writeData(value, key));
+                    } else {
+                        writePromises.push(removeData(key));
+                    }
+                }
+            }
+            await Promise.all(writePromises);
+        }
+    };
+
+    // 2. Bungkus dengan `makeCacheableSignalKeyStore` resmi dari Baileys
+    // Ini mengimplementasikan in-memory cache standar produksi untuk mencegah race condition / MAC sync error
+    const logger = pino({ level: 'silent' });
+    const cacheableStore = makeCacheableSignalKeyStore(supabaseStore, logger);
+
     return {
         state: {
             creds,
-            keys: {
-                get: async (type, ids) => {
-                    const data = {};
-                    for (const id of ids) {
-                        const key = `${type}-${id}`;
-                        
-                        // 1. Cek di Memory Cache dulu (Instan, bebas network latency)
-                        if (memoryCache.has(key)) {
-                            data[id] = memoryCache.get(key);
-                            continue;
-                        }
-
-                        // 2. Jika tidak ada di cache, baru ambil dari DB
-                        let value = await readData(key);
-                        if (type === 'app-state-sync-key' && value) {
-                            value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
-                        }
-                        
-                        // 3. Simpan ke Cache untuk request berikutnya
-                        if (value) {
-                            memoryCache.set(key, value);
-                        }
-                        data[id] = value;
-                    }
-                    return data;
-                },
-                set: async (data) => {
-                    const writePromises = [];
-                    for (const category in data) {
-                        for (const id in data[category]) {
-                            const value = data[category][id];
-                            const key = `${category}-${id}`;
-                            
-                            // Update RAM secara instan agar tidak terjadi desinkronisasi MAC
-                            if (value) {
-                                memoryCache.set(key, value);
-                                writePromises.push(writeData(value, key));
-                            } else {
-                                memoryCache.delete(key);
-                                writePromises.push(removeData(key));
-                            }
-                        }
-                    }
-                    // Sinkronisasi ke DB berjalan secara paralel tanpa memblokir RAM
-                    await Promise.all(writePromises);
-                },
-            },
+            keys: cacheableStore,
         },
         saveCreds: () => {
             return writeData(creds, 'creds');
         },
         clearSession: async () => {
-            memoryCache.clear();
             try {
                 await supabase.from('wa_sessions').delete().neq('id', 'dummy'); 
-                console.log('✅ Sesi WhatsApp berhasil dibersihkan dari memory cache & database.');
+                console.log('✅ Sesi WhatsApp berhasil dibersihkan dari database.');
             } catch (err) {
                 console.error('Error saat membersihkan sesi:', err);
             }
