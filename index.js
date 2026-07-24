@@ -24,7 +24,7 @@ let isConnected = false;
 let currentQR = null;
 
 async function connectToWhatsApp() {
-    const { state, saveCreds } = await useSupabaseAuthState(supabase);
+    const { state, saveCreds, clearSession } = await useSupabaseAuthState(supabase);
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`[WA] Memakai versi v${version.join('.')}, isLatest: ${isLatest}`);
 
@@ -34,6 +34,10 @@ async function connectToWhatsApp() {
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
         browser: ["Mac OS", "Chrome", "121.0.0.0"], // Menyamar sebagai Chrome di Mac untuk menghindari blokir
+        syncFullHistory: false,
+        markOnlineOnConnect: true,
+        generateHighQualityLinkPreview: false,
+        keepAliveIntervalMs: 30000,
         options: {
             timeout: 60000
         }
@@ -58,9 +62,13 @@ async function connectToWhatsApp() {
             console.log('Koneksi terputus karena:', lastDisconnect?.error, ', mencoba reconnect:', shouldReconnect);
             isConnected = false;
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(connectToWhatsApp, 3000); // Backoff 3 detik
             } else {
-                console.log('Anda sudah LOGOUT. Silakan hapus folder auth_info_baileys dan restart.');
+                console.log('Anda sudah LOGOUT. Membersihkan sesi dari database...');
+                clearSession().then(() => {
+                    console.log('Sesi dibersihkan. Memulai ulang gateway untuk mendapat QR baru...');
+                    connectToWhatsApp();
+                });
             }
         } else if (connection === 'open') {
             isConnected = true;

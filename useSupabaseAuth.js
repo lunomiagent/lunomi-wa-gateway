@@ -7,7 +7,7 @@ module.exports = async function useSupabaseAuthState(supabase) {
                 .from('wa_sessions')
                 .upsert({ id, data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)) });
         } catch (error) {
-            console.error('Error writing auth state to Supabase:', error);
+            console.error(`Error writing auth state to Supabase [${id}]:`, error);
         }
     };
 
@@ -32,7 +32,7 @@ module.exports = async function useSupabaseAuthState(supabase) {
                 .delete()
                 .eq('id', id);
         } catch (error) {
-            console.error('Error removing auth state from Supabase:', error);
+            console.error(`Error removing auth state from Supabase [${id}]:`, error);
         }
     };
 
@@ -44,32 +44,41 @@ module.exports = async function useSupabaseAuthState(supabase) {
             keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    await Promise.all(
-                        ids.map(async (id) => {
-                            let value = await readData(`${type}-${id}`);
-                            if (type === 'app-state-sync-key' && value) {
-                                value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
-                            }
-                            data[id] = value;
-                        })
-                    );
+                    for (const id of ids) {
+                        let value = await readData(`${type}-${id}`);
+                        if (type === 'app-state-sync-key' && value) {
+                            value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
+                        }
+                        data[id] = value;
+                    }
                     return data;
                 },
                 set: async (data) => {
-                    const tasks = [];
+                    // Eksekusi sequential (berurutan) agar tidak terjadi race-condition / korupsi data di Supabase
                     for (const category in data) {
                         for (const id in data[category]) {
                             const value = data[category][id];
                             const key = `${category}-${id}`;
-                            tasks.push(value ? writeData(value, key) : removeData(key));
+                            if (value) {
+                                await writeData(value, key);
+                            } else {
+                                await removeData(key);
+                            }
                         }
                     }
-                    await Promise.all(tasks);
                 },
             },
         },
         saveCreds: () => {
             return writeData(creds, 'creds');
         },
+        clearSession: async () => {
+            try {
+                await supabase.from('wa_sessions').delete().neq('id', 'dummy'); // Hapus semua baris
+                console.log('✅ Sesi WhatsApp berhasil dibersihkan dari database.');
+            } catch (err) {
+                console.error('Error saat membersihkan sesi:', err);
+            }
+        }
     };
 };
