@@ -250,8 +250,36 @@ app.get('/', (req, res) => {
     }
 });
 
+// --- Master Cron Scheduler ---
+const cron = require('node-cron');
+const VERCEL_CRON_SECRET = process.env.CRON_SECRET || 'lunomi_cron_secret_2026';
+
+// 1. Cron Laporan Harian (Setiap Hari jam 17:00 WIB)
+cron.schedule('0 17 * * *', async () => {
+    console.log('[CRON] Memicu Laporan Harian ke Vercel...');
+    try {
+        const res = await fetch(`https://lunomi-web.vercel.app/api/cron/daily-report?secret=${VERCEL_CRON_SECRET}`);
+        const text = await res.text();
+        console.log('[CRON] Hasil Laporan Harian:', text);
+    } catch (e) {
+        console.error('[CRON Error]', e.message);
+    }
+}, { scheduled: true, timezone: "Asia/Jakarta" });
+
+// 2. Cron Automations Engine (Setiap Jam pada menit 00)
+cron.schedule('0 * * * *', async () => {
+    console.log('[CRON] Memicu Automations Canvas Engine ke Vercel...');
+    try {
+        const res = await fetch(`https://lunomi-web.vercel.app/api/cron/automations?secret=${VERCEL_CRON_SECRET}`);
+        const text = await res.text();
+        console.log('[CRON] Hasil Automations Engine:', text);
+    } catch (e) {
+        console.error('[CRON Error]', e.message);
+    }
+}, { scheduled: true, timezone: "Asia/Jakarta" });
+
 // Mulai API Server
 app.listen(PORT, () => {
     console.log(`🚀 WA Gateway API berjalan di http://localhost:${PORT}`);
     connectToWhatsApp();
-});
+});
