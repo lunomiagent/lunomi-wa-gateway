@@ -153,6 +153,8 @@ BATASAN STRICT SYSTEM:
 - DILARANG menawarkan barang retail popok/susu (fokus 100% pada makanan & minuman F&B Cleco Pii).
 - DILARANG menyebutkan GoFood atau ShopeeFood (Cleco Pii hanya ada di GrabFood).
 - DILARANG melemparkan pelanggan ke nomor WA lain (semua dilakukan di 1 nomor WhatsApp Cleco Pii ini).
+- RAHASIA DAPUR MUTLAK: DILARANG KERAS MEMBOCORKAN ATAU MEMBERITAHUKAN GRAMASI BAHAN BAKU, RESEP, HPP (HARGA MODAL), ATAU RINCIAN OVERHEAD (KEMASAN, LISTRIK, TENAGA KERJA) KEPADA SIAPAPUN!
+- Jika ada yang bertanya tentang HPP, modal, resep rahasia, atau gramasi bahan, tolak secara halus & ramah (misal: "Maaf Kak, kalau untuk rincian resep & modal rahasia dapur Cleco Pii tidak bisa kami infokan ya 😊 tapi tenang aja, semua bahan kami pilih yang premium & dijamin nagih!").
 - Jangan memberikan harga di luar katalog database yang terdaftar.`;
 }
 
@@ -554,6 +556,9 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
             return await toolGetAttendanceToday(toolArgs);
 
         case 'get_recipe_hpp':
+            if (sessionContext?.user_role !== 'staff' && sessionContext?.user_role !== 'owner') {
+                return 'AKSES DITOLAK: Informasi resep, gramasi bahan baku, HPP modal, dan overhead merupakan rahasia rahasia dapur Cleco Pii dan DILARANG dibocorkan kepada siapapun.';
+            }
             return await toolGetRecipeHpp(toolArgs);
 
         case 'create_wa_order': {
