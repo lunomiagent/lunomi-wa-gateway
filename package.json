@@ -11,6 +11,7 @@
     "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.110.8",
     "@whiskeysockets/baileys": "^6.7.5",
+    "cors": "^2.8.6",
     "express": "^4.19.2",
     "node-cron": "^3.0.3",
     "pino": "^9.14.0",

@@ -7,7 +7,10 @@ const useSupabaseAuthState = require('./useSupabaseAuth');
 const sessionManager = require('./waSessionManager');
 const aiEngine = require('./aiEngine');
 
+const cors = require('cors');
+
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
