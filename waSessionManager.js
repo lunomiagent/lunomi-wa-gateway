@@ -176,6 +176,23 @@ async function setAiPaused(sessionId, durationMinutes = 60) {
 }
 
 /**
+ * Resume AI (nonaktifkan pause) untuk sesi ini.
+ */
+async function resumeAi(sessionId) {
+    if (!sessionId) return;
+    const { error } = await supabase
+        .from('wa_chat_sessions')
+        .update({ ai_paused: false, paused_until: null })
+        .eq('id', sessionId);
+
+    if (error) {
+        console.error('[SessionManager] Gagal resume AI:', error.message);
+        throw error;
+    }
+    console.log(`[SessionManager] AI Resumed untuk sesi ${sessionId}`);
+}
+
+/**
  * Ambil durasi pause dari wa_settings (default 60 menit).
  */
 async function getPauseDurationMinutes() {
@@ -375,6 +392,7 @@ module.exports = {
     getOrCreateSession,
     isAiPaused,
     setAiPaused,
+    resumeAi,
     getPauseDurationMinutes,
     updateContextMessages,
     logMessage,

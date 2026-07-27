@@ -136,6 +136,30 @@ async function handleIncomingMessage(msg) {
             messageText,
         });
 
+        // Handle Command Trigger: !stop, !kasir, !pause untuk Human Takeover & Matikan AI
+        const lowerMsg = messageText.trim().toLowerCase();
+        const isStopCmd = lowerMsg === '!stop' || lowerMsg === '/stop' || lowerMsg === '!pause' || lowerMsg === '/pause' || lowerMsg === '!kasir' || lowerMsg === '/kasir' || lowerMsg === '!human' || lowerMsg === 'stop ai' || lowerMsg === 'matikan ai';
+        const isStartCmd = lowerMsg === '!start' || lowerMsg === '/start' || lowerMsg === '!resume' || lowerMsg === '/resume' || lowerMsg === 'aktifkan ai';
+
+        if (isStopCmd) {
+            const pauseMinutes = await sessionManager.getPauseDurationMinutes();
+            await sessionManager.setAiPaused(session.id, pauseMinutes);
+            
+            const replyMsg = `⏸️ *Bot AI Cleco Pii Nonaktif Sementara*\n\nBot AI telah dimatikan selama ${pauseMinutes} menit untuk percakapan ini. Tim Kasir / CS Cleco Pii akan segera membalas pesan Anda secara manual.\n\n👉 *Ketik !start atau !resume kapan saja jika ingin mengaktifkan kembali Bot AI.*`;
+            await sock.sendMessage(jid, { text: replyMsg });
+
+            const alertText = `🚨 *HUMAN TAKEOVER REQUEST*\n----------------------------------------\n📱 *Pelanggan*: ${phoneNumber}\n💬 *Pesan*: "${messageText}"\n⚠️ *Status*: Bot AI telah di-pause. Mohon tim kasir segera membalas chat ini!`;
+            await sendGroupNotification(alertText);
+            return;
+        }
+
+        if (isStartCmd) {
+            await sessionManager.resumeAi(session.id);
+            const replyMsg = `▶️ *Bot AI Cleco Pii Aktif Kembali*\n\nBot AI telah diaktifkan kembali! Ada yang bisa kami bantu seputar menu, promo, atau order F&B Cleco Pii hari ini? ☕✨`;
+            await sock.sendMessage(jid, { text: replyMsg });
+            return;
+        }
+
         // Cek apakah AI sedang di-pause (human takeover aktif)
         const paused = await sessionManager.isAiPaused(session);
         if (paused) {
