@@ -633,6 +633,24 @@ app.get('/status', (req, res) => {
     res.json({ isConnected, hasQR: !!currentQR, aiMode: 'hybrid-gemini-openagentic' });
 });
 
+app.post('/api/wa/test-ai', async (req, res) => {
+    try {
+        const { message, phoneNumber } = req.body;
+        if (!message) return res.status(400).json({ error: 'message wajib diisi' });
+        const targetPhone = phoneNumber || '6280000000000';
+        const session = await sessionManager.getOrCreateSession(targetPhone);
+        const result = await aiEngine.processMessage({
+            messageText: message,
+            phoneNumber: targetPhone,
+            userRole: session.user_role || 'customer',
+            contextMessages: session.context_messages || [],
+        });
+        return res.json({ success: true, response: result });
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
 app.get('/', (req, res) => {
     if (isConnected) {
         res.send('Lunomi WA Gateway is ONLINE | CS AI Mode: AKTIF');
