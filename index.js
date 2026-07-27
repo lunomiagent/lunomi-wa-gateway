@@ -164,6 +164,9 @@ async function handleIncomingMessage(msg) {
             karyawanNama = karyawan?.nama || null;
         }
 
+        // Kirim indikator "sedang mengetik..." (composing) di WhatsApp
+        try { await sock.sendPresenceUpdate('composing', jid); } catch (_) {}
+
         // Proses dengan AI Engine
         let aiResult;
         try {
@@ -198,11 +201,14 @@ async function handleIncomingMessage(msg) {
             return;
         }
 
-        // Hentikan typing indicator
-        await sock.sendPresenceUpdate('paused', jid);
-
-        // Kirim balasan AI
         const replyText = aiResult.text || 'Maaf Kak, ada gangguan sementara. Coba lagi ya! 🙏';
+        
+        // Simulasi waktu mengetik alami manusia (1.2 - 2.5 detik)
+        const typingDelayMs = Math.min(2500, Math.max(1200, replyText.length * 12));
+        await delay(typingDelayMs);
+
+        // Hentikan typing indicator & kirim balasan AI
+        try { await sock.sendPresenceUpdate('paused', jid); } catch (_) {}
         await sock.sendMessage(jid, { text: replyText });
 
         // Update context messages

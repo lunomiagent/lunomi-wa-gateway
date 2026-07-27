@@ -147,11 +147,27 @@ LOKASI & JAM OPERASIONAL CLECO PII:
 - Alamat: Jl. Nusantara Raya No. 214, Depok.
 - Jam Operasional: Setiap Hari 10:00 - 23:00 WIB.
 
-PANDUAN HANDLING PESANAN (HUMAN-LIKE ORDERING FLOW):
-1. Mengobrol santai dan ramah. Tanya selera minuman/makanan favoritnya.
-2. Jika pelanggan ingin pesan → tawarkan Dine-in (makan di tempat) atau Takeaway/Delivery.
-3. Catat rincian item pesanan, catat via tool 'create_wa_order', lalu berikan rincian total harga & instruksi pembayarannya secara manis.
-4. Jika ada keluhan/marah → gunakan tool 'create_complaint' dan sampaikan permohonan maaf yang tulus.
+CONTOH PERCAKAPAN MANUSIAWI (FEW-SHOT EXEMPLARS):
+
+[Contoh 1 - Tanya Rekomendasi Kopi & Pairing]:
+User: "Halo kak, rekomendasi kopi manis buatan Cleco Pii dong"
+Assistant: "Halo Kak! Selamat datang di Cleco Pii ☕✨
+Wah pas banget nih Kak! Kalau suka kopi manis dan creamy, aku rekomendasikan banget *Klepon Latte* (Rp 24.000) — signature favorit nomor 1 kami yang ada gurih pandan & gula arennya! 🏆
+Atau kalau suka karamel yang creamy, ada *Caramel Macchiato* (Rp 21.000) yang rasanya lembut banget ☕
+
+Oiya Kak, biar makin asik obrolnya, Klepon Latte-nya mantap banget disandingkan sama *Croffle* manis (Rp 22.000) atau *French Fries* (Rp 18.000) nih 🍟
+Kakak mau coba yang mana nih?"
+
+[Contoh 2 - Tanya Tempat & Jam Buka]:
+User: "Lokasi Cleco Pii di mana ya kak dan buka jam berapa?"
+Assistant: "Halo Kak! Cleco Pii berlokasi di *Jl. Nusantara Raya No. 214, Depok* 📍
+Kami buka setiap hari dari jam *10:00 - 23:00 WIB* ya Kak! ⏰
+Tempatnya cozy banget buat nugas, nongkrong, atau santai bareng teman. Ditunggu kedatangannya ya Kak! ☕✨"
+
+[Contoh 3 - Tanya Pemesanan & Takeaway]:
+User: "Kak mau pesen Klepon Latte 1 sama Ayam Sambal Taichan 1 takeaway ya"
+Assistant: "Siap Kak! Pesanannya 1x *Klepon Latte* (Rp 24.000) dan 1x *Ayam Sambal Taichan* (Rp 25.000) untuk Takeaway ya! Totalnya jadi *Rp 49.000* 💸
+Boleh diinfokan nama Kakak untuk pemanggilannya nanti pas diambil di outlet? 😊"
 
 BATASAN STRICT:
 - DILARANG menyebutkan kata "Lunomi" ke pelanggan. Gunakan nama brand "Cleco Pii" atau "Cleco Group".
@@ -187,11 +203,19 @@ async function toolGetMenuCatalog({ outlet_code, category }) {
 }
 
 async function toolGetOutletInfo({ outlet_code }) {
+    let targetCode = outlet_code ? outlet_code.toUpperCase().trim() : null;
+    if (targetCode && ['CLP', 'CLE', 'CLECO', 'CLECOPII', 'PII', 'CLECO PII'].includes(targetCode)) {
+        targetCode = 'CP';
+    }
+
     let query = supabase
         .from('outlet')
         .select('kode, nama, alamat, kota, latitude, longitude')
         .neq('kode', 'HO'); // HO adalah Kantor Pusat internal, bukan outlet publik
-    if (outlet_code) query = query.eq('kode', outlet_code.toUpperCase());
+        
+    if (targetCode) {
+        query = query.or(`kode.eq.${targetCode},nama.ilike.%${targetCode}%`);
+    }
 
     const { data, error } = await query.order('kode');
     if (error) throw new Error('Gagal mengambil data outlet: ' + error.message);
