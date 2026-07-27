@@ -216,7 +216,7 @@ async function toolGetDailySales({ outlet_code, date }) {
     let query = supabase
         .from('transaksi')
         .select('outlet_id, total, status, outlet:outlet_id(kode, nama)')
-        .eq('status', 'selesai')
+        .not('status', 'eq', 'void')
         .gte('waktu', startOfDay)
         .lte('waktu', endOfDay);
 
@@ -309,10 +309,10 @@ async function toolGetRecipeHpp({ product_name }) {
         return `Produk "${product_name}" tidak ditemukan di database.`;
     }
 
-    // Ambil resep (bill of materials)
+    // Ambil resep (bill of materials) dari tabel bom
     const { data: resepItems, error: resepErr } = await supabase
-        .from('resep_produk')
-        .select('qty_butuh, satuan, bahan_baku:bahan_baku_id(nama, estimasi_harga_beli, satuan_dasar, faktor_konversi)')
+        .from('bom')
+        .select('jumlah_dibutuhkan, satuan, bahan_baku:bahan_baku_id(nama, estimasi_harga_beli, satuan_dasar, faktor_konversi)')
         .eq('produk_id', produk.produk_id);
 
     if (resepErr) throw new Error('Gagal mengambil data resep: ' + resepErr.message);
@@ -321,7 +321,7 @@ async function toolGetRecipeHpp({ product_name }) {
     const bahanList = (resepItems || []).map(r => {
         const hargaBahan = parseFloat(r.bahan_baku?.estimasi_harga_beli || 0);
         const faktorKonversi = parseFloat(r.bahan_baku?.faktor_konversi || 1);
-        const qtyButuh = parseFloat(r.qty_butuh || 0);
+        const qtyButuh = parseFloat(r.jumlah_dibutuhkan || 0);
         const biayaBahan = (qtyButuh / faktorKonversi) * hargaBahan;
         totalBahanBaku += biayaBahan;
         return {
