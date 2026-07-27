@@ -276,9 +276,28 @@ async function connectToWhatsApp() {
 
             console.log('\n✅ BERHASIL TERHUBUNG KE WHATSAPP SERVER META!');
             console.log('[CS-AI] AI Agent CS Mode: AKTIF');
+
+            // Auto-join group notifikasi dari wa_settings (flexible, tidak hardcode)
             try {
-                const jid = await sock.groupAcceptInvite('F2X9YMfgPn4D7rjhjZjRv3');
-                console.log('[WA Gateway] Joined group via invite code:', jid);
+                const inviteCode = await sessionManager.getGroupInviteCode();
+                if (inviteCode) {
+                    const jid = await sock.groupAcceptInvite(inviteCode);
+                    console.log('[WA Gateway] Joined group via invite code dari wa_settings:', jid);
+
+                    // Simpan JID hasil join ke wa_settings.notification_group secara otomatis
+                    if (jid) {
+                        await supabase
+                            .from('wa_settings')
+                            .upsert(
+                                { key: 'notification_group', value: { jid, name: 'WA Notif Outlet (auto-joined)' }, updated_at: new Date().toISOString() },
+                                { onConflict: 'key' }
+                            );
+                        console.log('[WA Gateway] Notification group JID otomatis tersimpan:', jid);
+                    }
+                } else {
+                    console.log('[WA Gateway] group_invite_code belum diatur di wa_settings. Lewati auto-join.');
+                    console.log('[WA Gateway] Set via: POST /api/wa/settings { key: "group_invite_code", value: "INVITE_CODE" }');
+                }
             } catch (err) {
                 console.log('[WA Gateway Group Join Check]:', err.message);
             }
@@ -319,7 +338,13 @@ app.post('/send', async (req, res) => {
             const code = target.split('chat.whatsapp.com/')[1].split('/')[0].split('?')[0].trim();
             try {
                 const joinedJid = await sock.groupAcceptInvite(code);
-                formattedTarget = joinedJid || '120363422372098957@g.us';
+                if (joinedJid) {
+                    formattedTarget = joinedJid;
+                } else {
+                    // Fallback: ambil dari wa_settings, bukan hardcode
+                    formattedTarget = (await sessionManager.getNotificationGroupJid()) || null;
+                    if (!formattedTarget) throw new Error('Gagal join group dan notification_group JID belum dikonfigurasi di wa_settings');
+                }
                 await new Promise(r => setTimeout(r, 2000));
             } catch (err) {
                 console.log('[WA Gateway Group Join Note]:', err.message);
@@ -327,7 +352,11 @@ app.post('/send', async (req, res) => {
                     const info = await sock.groupGetInviteInfo(code);
                     formattedTarget = info.id;
                 } catch (e) {
-                    formattedTarget = '120363422372098957@g.us';
+                    // Fallback terakhir: ambil dari wa_settings
+                    formattedTarget = (await sessionManager.getNotificationGroupJid()) || null;
+                    if (!formattedTarget) {
+                        return res.status(400).json({ error: 'Tidak dapat menentukan target group. Pastikan group_invite_code dan notification_group sudah diatur di wa_settings.' });
+                    }
                 }
             }
         } else if (target.endsWith('@g.us')) {
@@ -509,7 +538,63 @@ app.get('/api/wa/sessions', async (req, res) => {
     }
 });
 
-// ─── Status & QR Endpoints ────────────────────────────────────────────────────
+/**
+ * POST /api/wa/join-group
+ * Trigger manual join WA Group via invite code dari wa_settings atau dari body.
+ * Body opsional: { inviteCode: "ABCD1234" }
+ * Setelah join, JID otomatis tersimpan ke wa_settings.notification_group.
+ */
+app.post('/api/wa/join-group', async (req, res) => {
+    try {
+        if (!isConnected || !sock) {
+            return res.status(503).json({ error: 'WhatsApp Gateway belum terhubung. Scan QR terlebih dahulu.' });
+        }
+
+        // Prioritas: dari body request, lalu dari wa_settings
+        let inviteCode = req.body?.inviteCode?.trim() || null;
+        if (!inviteCode) {
+            inviteCode = await sessionManager.getGroupInviteCode();
+        }
+
+        if (!inviteCode) {
+            return res.status(400).json({
+                error: 'Invite code tidak ditemukan. Set via body { inviteCode: "CODE" } atau via POST /api/wa/settings { key: "group_invite_code", value: "CODE" }',
+            });
+        }
+
+        // Bersihkan jika URL lengkap dimasukkan
+        if (inviteCode.includes('chat.whatsapp.com/')) {
+            inviteCode = inviteCode.split('chat.whatsapp.com/')[1].split('/')[0].split('?')[0].trim();
+        }
+
+        const jid = await sock.groupAcceptInvite(inviteCode);
+        if (!jid) {
+            return res.status(400).json({ error: 'Gagal join group. Periksa invite code dan pastikan akun WA belum ada di group.' });
+        }
+
+        // Simpan JID ke wa_settings.notification_group
+        const { error: upsertErr } = await supabase
+            .from('wa_settings')
+            .upsert(
+                { key: 'notification_group', value: { jid, name: 'WA Notif Outlet' }, updated_at: new Date().toISOString() },
+                { onConflict: 'key' }
+            );
+
+        if (upsertErr) throw upsertErr;
+
+        console.log(`[WA Gateway] Manual join group sukses. JID: ${jid}`);
+        return res.json({
+            success: true,
+            message: `Berhasil join group. JID tersimpan sebagai notification_group.`,
+            jid,
+        });
+    } catch (err) {
+        console.error('[WA Gateway] /api/wa/join-group error:', err.message);
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+
 app.get('/qr', (req, res) => {
     if (isConnected) {
         return res.send(`

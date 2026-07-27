@@ -331,6 +331,29 @@ async function getNotificationGroupJid() {
 }
 
 /**
+ * Ambil invite code WhatsApp Group dari wa_settings.
+ * Digunakan saat gateway pertama connect untuk auto-join group notifikasi.
+ * @returns {string|null}
+ */
+async function getGroupInviteCode() {
+    try {
+        const { data } = await supabase
+            .from('wa_settings')
+            .select('value')
+            .eq('key', 'group_invite_code')
+            .single();
+        // value bisa string langsung atau object { code: "xxx" }
+        const val = data?.value;
+        if (!val) return null;
+        if (typeof val === 'string') return val.trim() || null;
+        if (typeof val === 'object') return val.code?.trim() || null;
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Cek apakah AI secara global diaktifkan (from wa_settings).
  */
 async function isAiGloballyEnabled() {
@@ -359,5 +382,6 @@ module.exports = {
     markOrderNotified,
     createComplaintTicket,
     getNotificationGroupJid,
+    getGroupInviteCode,
     isAiGloballyEnabled,
 };
