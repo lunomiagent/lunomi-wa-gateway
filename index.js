@@ -110,12 +110,17 @@ async function handleIncomingMessage(msg) {
 
     if (!messageText.trim()) return;
 
-    // Proteksi Self-Chat: jika pesan dari bot sendiri (fromMe = true),
-    // izinkan jika diawali '!test', '[test]', atau 'test' untuk testing self-chat di WhatsApp Web.
+    // Handle pesan dari akun WhatsApp sendiri (fromMe = true)
     if (msg.key?.fromMe) {
         const lower = messageText.trim().toLowerCase();
         const isSelfTest = lower.startsWith('!test') || lower.startsWith('[test]') || lower.startsWith('test');
-        if (!isSelfTest) return;
+        if (!isSelfTest) {
+            // Tim Kasir mengetik balasan manual dari HP -> AI otomatis pause secara hening (silent pause)
+            const session = await sessionManager.getOrCreateSession(phoneNumber);
+            await sessionManager.setAiPaused(session.id, 60);
+            console.log(`[CS-AI] Kasir membalas manual dari HP. AI otomatis paused (60m) untuk ${phoneNumber}.`);
+            return;
+        }
 
         // Bersihkan prefix test agar AI menjawab pertanyaan utama dengan natural
         messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
@@ -136,27 +141,20 @@ async function handleIncomingMessage(msg) {
             messageText,
         });
 
-        // Handle Command Trigger: !stop, !kasir, !pause untuk Human Takeover & Matikan AI
+        // Deteksi secara natural jika pelanggan ingin bicara dengan kasir / manusia
         const lowerMsg = messageText.trim().toLowerCase();
-        const isStopCmd = lowerMsg === '!stop' || lowerMsg === '/stop' || lowerMsg === '!pause' || lowerMsg === '/pause' || lowerMsg === '!kasir' || lowerMsg === '/kasir' || lowerMsg === '!human' || lowerMsg === 'stop ai' || lowerMsg === 'matikan ai';
-        const isStartCmd = lowerMsg === '!start' || lowerMsg === '/start' || lowerMsg === '!resume' || lowerMsg === '/resume' || lowerMsg === 'aktifkan ai';
+        const isKasirRequest = lowerMsg.includes('kasir') || lowerMsg.includes('admin') || lowerMsg.includes('manusia') || lowerMsg.includes('hubungi mas') || lowerMsg.includes('hubungi mba') || lowerMsg.includes('bicara langsung') || lowerMsg.includes('stop ai') || lowerMsg === '!kasir' || lowerMsg === '!stop';
 
-        if (isStopCmd) {
+        if (isKasirRequest) {
             const pauseMinutes = await sessionManager.getPauseDurationMinutes();
             await sessionManager.setAiPaused(session.id, pauseMinutes);
             
-            const replyMsg = `⏸️ *Bot AI Cleco Pii Nonaktif Sementara*\n\nBot AI telah dimatikan selama ${pauseMinutes} menit untuk percakapan ini. Tim Kasir / CS Cleco Pii akan segera membalas pesan Anda secara manual.\n\n👉 *Ketik !start atau !resume kapan saja jika ingin mengaktifkan kembali Bot AI.*`;
+            // Balasan hangat dan sangat natural seperti manusia (tanpa kode command kaku)
+            const replyMsg = `Boleh banget Kak! Sebentar ya, aku panggilkan tim kasir kita yang lagi jaga di toko buat lanjut ngobrol langsung sama Kakak di sini 😊`;
             await sock.sendMessage(jid, { text: replyMsg });
 
-            const alertText = `🚨 *HUMAN TAKEOVER REQUEST*\n----------------------------------------\n📱 *Pelanggan*: ${phoneNumber}\n💬 *Pesan*: "${messageText}"\n⚠️ *Status*: Bot AI telah di-pause. Mohon tim kasir segera membalas chat ini!`;
+            const alertText = `🔔 *KASIR HANDOVER ALERT*\n----------------------------------------\n📱 *Pelanggan*: ${phoneNumber}\n💬 *Pesan*: "${messageText}"\n⚠️ *Status*: Pelanggan ingin chat langsung dengan Kasir. AI telah di-pause. Mohon tim kasir lanjut jawab di WA ini!`;
             await sendGroupNotification(alertText);
-            return;
-        }
-
-        if (isStartCmd) {
-            await sessionManager.resumeAi(session.id);
-            const replyMsg = `▶️ *Bot AI Cleco Pii Aktif Kembali*\n\nBot AI telah diaktifkan kembali! Ada yang bisa kami bantu seputar menu, promo, atau order F&B Cleco Pii hari ini? ☕✨`;
-            await sock.sendMessage(jid, { text: replyMsg });
             return;
         }
 
