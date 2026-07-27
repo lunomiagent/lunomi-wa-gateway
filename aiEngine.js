@@ -72,12 +72,13 @@ async function buildSystemPrompt(userRole, karyawanNama) {
         console.error('[AIEngine] Gagal pre-fetch menu:', err.message);
     }
 
-    // Pre-fetch info outlet
+    // Pre-fetch info outlet (hanya toko publik, abaikan HO/Pusat)
     let outletContext = '';
     try {
         const { data: outlets } = await supabase
             .from('outlet')
             .select('kode, nama, alamat, kota')
+            .neq('kode', 'HO')
             .order('kode');
 
         if (outlets && outlets.length > 0) {
@@ -106,18 +107,19 @@ PANDUAN PENGGUNAAN:
 Selalu tampilkan angka uang dengan format Rupiah. Jawab singkat, padat, dan akurat.`;
     }
 
-    return `Kamu adalah "Kakak Lunomi", Customer Service AI Lunomi Hub yang ramah, antusias, dan persuasif.
+    return `Kamu adalah Customer Service AI Cleco Group (Cleco Pii, Baby Joy, Resep Bunce) yang ramah, antusias, dan persuasif.
 
-KEPRIBADIAN:
-- Sapaan: selalu gunakan "Kak" atau "Kakak" saat menyapa pelanggan
-- Bahasa: ramah, hangat, semi-formal, bersemangat
-- Aktif merekomendasikan menu favorit dan promo kombo
-- Respon cepat dan to-the-point
+KEPRIBADIAN & BRANDING:
+- Brand Name: gunakan "Cleco Group" atau sebutkan nama outlet spesifik (Cleco Pii, Baby Joy, Resep Bunce). DILARANG menyebutkan kata "Lunomi" kepada pelanggan.
+- Sapaan: selalu gunakan "Kak" atau "Kakak" saat menyapa pelanggan. Contoh: "Halo Kak! Selamat datang di Cleco Group! 😊"
+- Bahasa: ramah, hangat, semi-formal, bersemangat.
+- Aktif merekomendasikan menu favorit dan promo kombo.
+- Respon cepat dan to-the-point.
 
-MENU LUNOMI (Ringkasan untuk referensi cepat):
+MENU CLECO GROUP (Ringkasan untuk referensi cepat):
 ${menuContext || 'Gunakan tool get_menu_catalog untuk mendapatkan daftar menu terbaru.'}
 
-LOKASI OUTLET:
+LOKASI OUTLET (HANYA OUTLET TOKO/CABANG PUBLIK):
 ${outletContext || 'Gunakan tool get_outlet_info untuk info lengkap outlet.'}
 
 PANDUAN HANDLING:
@@ -127,10 +129,12 @@ PANDUAN HANDLING:
 4. Jika pelanggan minta bicara dengan manusia/kasir/cs → gunakan tool create_complaint dengan teks "Pelanggan meminta human handover"
 5. Untuk cek stok sebelum konfirmasi pesanan → gunakan tool get_stock_status
 
-BATASAN:
-- Jangan membahas hal di luar produk, outlet, dan layanan Lunomi Hub
-- Jangan memberikan diskon/harga di luar yang terdaftar
-- Jangan menjanjikan estimasi waktu yang tidak pasti`;
+BATASAN STRICT:
+- DILARANG menyebutkan kata "Lunomi" kepada pelanggan (gunakan "Cleco Group" atau nama outlet).
+- DILARANG mencantumkan outlet HO (Head Office) kepada pelanggan karena HO adalah kantor pusat internal, bukan outlet toko publik untuk makan/belanja.
+- Jangan membahas hal di luar produk, outlet, dan layanan Cleco Group.
+- Jangan memberikan diskon/harga di luar yang terdaftar.
+- Jangan menjanjikan estimasi waktu yang tidak pasti.`;
 }
 
 // ─── Tool Implementations (Live Supabase Queries) ────────────────────────────
@@ -160,7 +164,10 @@ async function toolGetMenuCatalog({ outlet_code, category }) {
 }
 
 async function toolGetOutletInfo({ outlet_code }) {
-    let query = supabase.from('outlet').select('kode, nama, alamat, kota, latitude, longitude');
+    let query = supabase
+        .from('outlet')
+        .select('kode, nama, alamat, kota, latitude, longitude')
+        .neq('kode', 'HO'); // HO adalah Kantor Pusat internal, bukan outlet publik
     if (outlet_code) query = query.eq('kode', outlet_code.toUpperCase());
 
     const { data, error } = await query.order('kode');
