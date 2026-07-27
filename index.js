@@ -319,10 +319,8 @@ async function connectToWhatsApp() {
 
     // ─── LISTENER PESAN MASUK (CS AI) ────────────────────────────────────────
     sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        // Hanya proses tipe 'notify' (pesan masuk real-time)
-        if (type !== 'notify') return;
+        // Proses pesan real-time ('notify') maupun pesan self-chat ('append')
         for (const msg of messages) {
-            // Proses tiap pesan secara async, tidak blocking satu sama lain
             handleIncomingMessage(msg).catch(err => {
                 console.error('[CS-AI] Uncaught error in handleIncomingMessage:', err.message);
             });
