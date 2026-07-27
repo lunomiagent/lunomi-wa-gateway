@@ -639,7 +639,9 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
             throw new Error(`OpenAgentic API error ${response.status}: ${errText}`);
         }
 
-        const data = await response.json();
+        const rawText = await response.text();
+        const jsonText = rawText.split('data:')[0].trim();
+        const data = JSON.parse(jsonText);
         const choice = data.choices?.[0];
 
         if (!choice) throw new Error('OpenAgentic: Response tidak valid (tidak ada choices)');
