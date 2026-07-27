@@ -546,55 +546,65 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
-    const model = geminiClient.getGenerativeModel({
-        model: 'gemini-2.5-flash',
-        systemInstruction: systemPrompt,
-        tools: GEMINI_TOOLS,
-    });
+    const candidateModels = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
+    let lastErr = null;
 
-    // Konversi contextMessages ke format Gemini
-    const history = (contextMessages || []).map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-    }));
-
-    const chat = model.startChat({ history });
-
-    let result = await chat.sendMessage(userMessage);
-    let response = result.response;
-    const toolsCalledLog = [];
-
-    // Agentic loop untuk tool calls
-    let maxIterations = 5;
-    while (maxIterations-- > 0) {
-        const functionCalls = response.functionCalls();
-        if (!functionCalls || functionCalls.length === 0) break;
-
-        const toolResults = [];
-        for (const fc of functionCalls) {
-            toolsCalledLog.push(fc.name);
-            const toolResult = await executeTool(fc.name, fc.args, sessionContext, onOrderCreated, onComplaintCreated);
-            toolResults.push({
-                functionResponse: {
-                    name: fc.name,
-                    response: { content: toolResult },
-                },
+    for (const modelName of candidateModels) {
+        try {
+            const model = geminiClient.getGenerativeModel({
+                model: modelName,
+                systemInstruction: systemPrompt,
+                tools: GEMINI_TOOLS,
             });
-        }
 
-        result = await chat.sendMessage(toolResults);
-        response = result.response;
+            // Konversi contextMessages ke format Gemini
+            const history = (contextMessages || []).map(m => ({
+                role: m.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: m.content }],
+            }));
+
+            const chat = model.startChat({ history });
+
+            let result = await chat.sendMessage(userMessage);
+            let response = result.response;
+            const toolsCalledLog = [];
+
+            // Agentic loop untuk tool calls
+            let maxIterations = 5;
+            while (maxIterations-- > 0) {
+                const functionCalls = response.functionCalls();
+                if (!functionCalls || functionCalls.length === 0) break;
+
+                const toolResults = [];
+                for (const fc of functionCalls) {
+                    toolsCalledLog.push(fc.name);
+                    const toolResult = await executeTool(fc.name, fc.args, sessionContext, onOrderCreated, onComplaintCreated);
+                    toolResults.push({
+                        functionResponse: {
+                            name: fc.name,
+                            response: { content: toolResult },
+                        },
+                    });
+                }
+
+                result = await chat.sendMessage(toolResults);
+                response = result.response;
+            }
+
+            const finalText = response.text();
+            return {
+                text: finalText,
+                model: modelName,
+                toolsCalled: toolsCalledLog.length > 0 ? toolsCalledLog : null,
+                tokensUsed: response.usageMetadata?.totalTokenCount || null,
+            };
+        } catch (err) {
+            console.warn(`[AIEngine] Gemini model ${modelName} note:`, err.message);
+            lastErr = err;
+        }
     }
 
-    const finalText = response.text();
-    const totalTokens = response.usageMetadata?.totalTokenCount || null;
-
-    return {
-        text: finalText,
-        model: 'gemini-2.5-flash',
-        toolsCalled: toolsCalledLog.length > 0 ? toolsCalledLog : null,
-        tokensUsed: totalTokens,
-    };
+    throw lastErr || new Error('All Gemini candidate models failed.');
 }
 
 // ─── OpenAgentic (OpenAI-compatible) Fallback Engine ─────────────────────────
@@ -640,7 +650,20 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
         if (choice.finish_reason === 'tool_calls' && assistantMessage.tool_calls) {
             for (const toolCall of assistantMessage.tool_calls) {
                 const toolName = toolCall.function.name;
-                const toolArgs = JSON.parse(toolCall.function.arguments || '{}');
+                let rawArgs = toolCall.function.arguments || '{}';
+                rawArgs = rawArgs.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+                if (rawArgs.includes('```json')) {
+                    rawArgs = rawArgs.split('```json')[1].split('```')[0].trim();
+                } else if (rawArgs.includes('```')) {
+                    rawArgs = rawArgs.split('```')[1].split('```')[0].trim();
+                }
+                let toolArgs = {};
+                try {
+                    toolArgs = JSON.parse(rawArgs);
+                } catch (pErr) {
+                    console.warn('[AIEngine] OpenAgentic toolArgs parse note:', pErr.message);
+                }
+
                 toolsCalledLog.push(toolName);
                 const toolResult = await executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated);
                 messages.push({
