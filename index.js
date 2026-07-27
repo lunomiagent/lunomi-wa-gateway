@@ -99,17 +99,27 @@ function formatComplaintNotification(ticket, phoneNumber) {
 async function handleIncomingMessage(msg) {
     const jid = msg.key?.remoteJid;
 
-    // Filter: hanya private chat, bukan pesan dari bot sendiri
+    // Filter: hanya private chat
     if (!jid || jid.endsWith('@g.us') || jid.endsWith('@broadcast')) return;
-    if (msg.key?.fromMe) return;
 
     // Ekstrak teks pesan
-    const messageText = msg.message?.conversation
+    let messageText = msg.message?.conversation
         || msg.message?.extendedTextMessage?.text
         || msg.message?.imageMessage?.caption
         || '';
 
     if (!messageText.trim()) return;
+
+    // Proteksi Self-Chat: jika pesan dari bot sendiri (fromMe = true),
+    // izinkan jika diawali '!test', '[test]', atau 'test' untuk testing self-chat di WhatsApp Web.
+    if (msg.key?.fromMe) {
+        const lower = messageText.trim().toLowerCase();
+        const isSelfTest = lower.startsWith('!test') || lower.startsWith('[test]') || lower.startsWith('test');
+        if (!isSelfTest) return;
+
+        // Bersihkan prefix test agar AI menjawab pertanyaan utama dengan natural
+        messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
+    }
 
     const phoneNumber = sessionManager.normalizePhone(jid);
     console.log(`[CS-AI] Pesan masuk dari ${phoneNumber}: "${messageText.substring(0, 80)}..."`);
