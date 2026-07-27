@@ -20,6 +20,6 @@ services:
       - key: OPENAI_BASE_URL
         value: https://openagentic.id/api/v1
       - key: LUNOMI_AGENT_MODEL
-        value: claude-sonnet-4.5-thinking
+        value: deepseek-v4-flash
       - key: CRON_SECRET
         sync: false

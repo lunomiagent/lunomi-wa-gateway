@@ -29,7 +29,7 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const geminiApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
 const openAgenticApiKey = process.env.OPENAI_API_KEY;
 const openAgenticBaseUrl = process.env.OPENAI_BASE_URL || 'https://openagentic.id/api/v1';
-const openAgenticModel = process.env.LUNOMI_AGENT_MODEL || 'claude-sonnet-4.5-thinking';
+const openAgenticModel = process.env.LUNOMI_AGENT_MODEL || 'deepseek-v4-flash';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
