@@ -618,6 +618,8 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
     const toolsCalledLog = [];
     let maxIterations = 5;
 
+    const targetModel = (openAgenticModel && !openAgenticModel.includes('claude')) ? openAgenticModel : 'deepseek-v4-flash';
+
     while (maxIterations-- > 0) {
         const response = await fetch(`${openAgenticBaseUrl}/chat/completions`, {
             method: 'POST',
@@ -626,7 +628,7 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
                 'Authorization': `Bearer ${openAgenticApiKey}`,
             },
             body: JSON.stringify({
-                model: openAgenticModel,
+                model: targetModel,
                 messages,
                 tools: OPENAI_TOOLS,
                 tool_choice: 'auto',
@@ -707,21 +709,25 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
     const contextMessages = session.context_messages || [];
     const sessionContext = { sessionId: session.id, phoneNumber: session.phone_number };
 
-    // Coba Gemini dulu
+    // 1. Coba OpenAgentic (DeepSeek V4 Flash) terlebih dahulu karena stabil & terverifikasi
+    if (openAgenticApiKey) {
+        try {
+            return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
+        } catch (openAgenticErr) {
+            console.error('[AIEngine] OpenAgentic error, mencoba fallback ke Gemini:', openAgenticErr.message);
+        }
+    }
+
+    // 2. Fallback ke Gemini
     if (geminiClient) {
         try {
             return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
         } catch (geminiErr) {
-            console.error('[AIEngine] Gemini error, fallback ke OpenAgentic:', geminiErr.message);
+            console.error('[AIEngine] Gemini error:', geminiErr.message);
         }
     }
 
-    // Fallback ke OpenAgentic
-    if (openAgenticApiKey) {
-        return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-    }
-
-    throw new Error('Tidak ada AI engine yang tersedia. Periksa GOOGLE_GENERATIVE_AI_API_KEY atau OPENAI_API_KEY.');
+    throw new Error('Tidak ada AI engine yang tersedia. Periksa OPENAI_API_KEY atau GOOGLE_GENERATIVE_AI_API_KEY.');
 }
 
 module.exports = {
