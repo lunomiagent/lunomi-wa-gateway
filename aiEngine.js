@@ -47,25 +47,26 @@ if (geminiApiKey) {
  * Data katalog menu & outlet di-inject agar respon umum bisa cepat tanpa tool call.
  */
 async function buildSystemPrompt(userRole, karyawanNama) {
-    // Pre-fetch katalog menu singkat (nama & harga) untuk konteks umum
+    // Pre-fetch katalog menu F&B terhubung langsung dengan tabel kategori_produk
     let menuContext = '';
     try {
         const { data: menuItems } = await supabase
             .from('produk')
-            .select('nama, harga_jual, tipe, sub_kategori')
+            .select('nama, harga_jual, tipe, sub_kategori, kategori:kategori_id(nama)')
             .eq('aktif', true)
-            .order('tipe')
-            .limit(40);
+            .eq('tipe', 'menu_fnb')
+            .order('nama')
+            .limit(60);
 
         if (menuItems && menuItems.length > 0) {
             const groupedMenu = menuItems.reduce((acc, item) => {
-                const cat = item.sub_kategori || item.tipe || 'Lainnya';
+                const cat = item.kategori?.nama || item.sub_kategori || 'LAINNYA';
                 if (!acc[cat]) acc[cat] = [];
                 acc[cat].push(`${item.nama} (Rp ${Number(item.harga_jual).toLocaleString('id-ID')})`);
                 return acc;
             }, {});
             menuContext = Object.entries(groupedMenu)
-                .map(([cat, items]) => `*${cat}*:\n${items.join(', ')}`)
+                .map(([cat, items]) => `*Kategori ${cat}*:\n${items.join(', ')}`)
                 .join('\n\n');
         }
     } catch (err) {
@@ -115,18 +116,27 @@ PERSONA & GAYA BICARA:
 - Gunakan sedikit emoji yang pas (misal: ☕, ☕✨, 🍕, 🍟, 🍹, 🍨, 🫶) agar obrolan terasa hidup dan estetik.
 - Selalu siap mendengarkan selera pelanggan dan memberikan rekomendasi yang cocok!
 
-KNOWLEDGE PRODUCT CLECO PII & MATRIX REKOMENDASI PINTAR:
+KNOWLEDGE PRODUCT CLECO PII & MATRIX REKOMENDASI PINTAR (REAL SUPABASE DATABASE):
 
-🌟 KATEGORI SIGNATURE CLECO PII (UTAMA & BEST SELLER):
-- ☕ Signature Coffee:
-  * Klepon Latte (Rp 24.000) — Sensasi kopi kekinian gurih manis khas pandan & gula aren, signature nomor 1 wajib coba!
-  * Srawung Aren (Rp 25.000) — Kopi susu aren racikan khas Cleco Pii, creamy dan rasanya pas.
-- 🍵 Signature Non-Coffee:
-  * Klepon Milk (Rp 22.000) — Non-kopi manis gurih rasa klepon kelapa pandan yang creamy.
-  * Butterscotch Sea Salt (Rp 26.000) — Kombinasi manis caramel butterscotch & gurih sea salt yang unik.
-- 🍽️ Signature Food:
-  * Nasi Goreng Seafood (Rp 35.000) — Nasi goreng kaya rempah dengan udang & cumi melimpah, porsi puas!
-  * Ayam Sambal Taichan (Rp 25.000) — Ayam crispy dipadu sambal taichan segar yang pedasnya bikin nagih!
+🌟 KATEGORI RESMI DATABASE CLECO PII:
+- ☕ Kategori SIGNATURE (Resmi Database):
+  * Srawung Aren (Rp 25.000) — Kopi susu aren racikan khas Cleco Pii, creamy dan manisnya pas!
+  * Srawung Vanilla (Rp 25.000) — Kopi susu aren dipadu keharuman vanilla yang lembut.
+  * Coffee 08 (Rp 30.000) — Premium house blend khas Cleco.
+  * Coffee Signature Botol (Rp 15.000) — Kopi signature praktis siap minum.
+- ☕ Kategori ESPRESSO BASED (Hits Best Seller):
+  * Klepon Latte (Rp 24.000) — Kopi kekinian gurih manis khas pandan & gula aren, paling favorit!
+  * Butterscotch Sea Salt (Rp 26.000) — Caramel butterscotch manis dipadu sea salt gurih.
+  * Pandan Latte (Rp 24.000) | Caramel Macchiato (Rp 21.000) | Americano (Rp 22.000) | Cappuccino (Rp 21.000).
+- 🍵 Kategori NON COFFEE:
+  * Klepon Milk (Rp 22.000) | Matcha (Rp 22.000) | Red Velvet (Rp 22.000) | Chocolate (Rp 22.000).
+  * Lychee Yakult (Rp 24.000) | Mango Yakult (Rp 24.000) | Sunrise Mojito (Rp 28.000).
+- 🍽️ Kategori MAIN COURSE & MIE:
+  * Nasi Goreng Seafood (Rp 35.000) | Ayam Sambal Taichan (Rp 25.000) | Spicy Beef Rice Bowl (Rp 32.000).
+  * Indomie Taichan (Rp 20.000) | Indomie Nyemek (Rp 23.000).
+- 🍟 Kategori SNACK & DESSERT:
+  * Mix Platter (Rp 35.000) | Croffle (Rp 22.000) | French Fries (Rp 18.000) | Cireng Rujak (Rp 16.000).
+  * French Toast (Rp 22.000) | Ketan Hitam Triple Scoop (Rp 24.000).
 
 💡 MATRIX REKOMENDASI BERDASARKAN SELERA PELANGGAN:
 - Pelanggan Suka Kopi Manis & Creamy → Rekomendasikan *Klepon Latte* (Rp 24.000) atau *Caramel Macchiato* (Rp 21.000).
@@ -181,19 +191,28 @@ BATASAN STRICT:
 async function toolGetMenuCatalog({ outlet_code, category }) {
     let query = supabase
         .from('produk')
-        .select('nama, harga_jual, tipe, sub_kategori')
+        .select('nama, harga_jual, tipe, sub_kategori, kategori:kategori_id(nama)')
         .eq('aktif', true)
+        .eq('tipe', 'menu_fnb')
         .order('nama');
 
-    if (category) query = query.ilike('tipe', `%${category}%`);
-
-    const { data, error } = await query.limit(50);
+    const { data, error } = await query.limit(60);
     if (error) throw new Error('Gagal mengambil data menu: ' + error.message);
 
     if (!data || data.length === 0) return 'Tidak ada produk yang tersedia saat ini.';
 
-    const grouped = data.reduce((acc, item) => {
-        const cat = item.sub_kategori || item.tipe || 'Lainnya';
+    let filteredData = data;
+    if (category) {
+        const catUpper = category.toUpperCase();
+        filteredData = data.filter(item => {
+            const catName = (item.kategori?.nama || '').toUpperCase();
+            const subCat = (item.sub_kategori || '').toUpperCase();
+            return catName.includes(catUpper) || subCat.includes(catUpper);
+        });
+    }
+
+    const grouped = (filteredData.length > 0 ? filteredData : data).reduce((acc, item) => {
+        const cat = item.kategori?.nama || item.sub_kategori || 'LAINNYA';
         if (!acc[cat]) acc[cat] = [];
         acc[cat].push({ nama: item.nama, harga: `Rp ${Number(item.harga_jual).toLocaleString('id-ID')}` });
         return acc;
