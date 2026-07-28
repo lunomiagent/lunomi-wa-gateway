@@ -596,9 +596,13 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
     const candidateModels = [
-        'gemini-2.0-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash-8b',
+        'gemini-1.5-pro-latest',
+        'gemini-2.0-flash-exp',
         'gemini-1.5-flash',
-        'gemini-1.5-pro'
+        'gemini-1.5-pro',
+        'gemini-2.0-flash',
     ];
     let lastErr = null;
 
@@ -777,7 +781,7 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         }
     }
 
-    // 2. Fallback ke Gemini (Google Gemini 3.6 Flash)
+    // 2. Fallback ke Gemini
     if (geminiClient) {
         try {
             return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
@@ -786,7 +790,14 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         }
     }
 
-    throw new Error('Tidak ada AI engine yang tersedia. Periksa GOOGLE_GENERATIVE_AI_API_KEY atau OPENAI_API_KEY.');
+    // 3. Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
+    console.log('[AIEngine] Seluruh AI Model kuota habis / tidak merespon. Menggunakan balasan CS fallback.');
+    return {
+        text: 'Halo Kak! Terima kasih telah menghubungi Cleco Pii 😊 Tim kasir kami sedang memproses data & siap membantu Kakak. Untuk informasi menu F&B favorit atau pesanan toko, silakan infokan di sini ya Kak! 🙏',
+        model: 'cs-fallback-engine',
+        toolsCalled: null,
+        tokensUsed: 0,
+    };
 }
 
 module.exports = {

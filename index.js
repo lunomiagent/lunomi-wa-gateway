@@ -95,6 +95,9 @@ function formatComplaintNotification(ticket, phoneNumber) {
         `👉 *Mohon Tim CS / Kasir segera buka chat nomor ini & bantu selesaikan!*`;
 }
 
+// Track ID pesan yang dikirim oleh Bot AI agar tidak memicu self-pausing
+const botSentMessageIds = new Set();
+
 // ─── AI Message Handler (Private Chat Only) ───────────────────────────────────
 async function handleIncomingMessage(msg) {
     const jid = msg.key?.remoteJid;
@@ -127,10 +130,16 @@ async function handleIncomingMessage(msg) {
 
     // Handle pesan dari akun WhatsApp sendiri (fromMe = true)
     if (msg.key?.fromMe) {
+        // Jika pesan ini dikirimkan oleh Bot AI kita sendiri, ABAIKAN! Jangan pause AI!
+        if (msg.key?.id && botSentMessageIds.has(msg.key.id)) {
+            botSentMessageIds.delete(msg.key.id);
+            return;
+        }
+
         const lower = messageText.trim().toLowerCase();
         const isSelfTest = lower.startsWith('!test') || lower.startsWith('[test]') || lower.startsWith('test');
         if (!isSelfTest) {
-            // Tim Kasir mengetik balasan manual dari HP -> AI otomatis pause secara hening (silent pause)
+            // Hanya jika manusia membalas manual dari HP kasir -> Pause AI 60m
             const session = await sessionManager.getOrCreateSession(phoneNumber);
             await sessionManager.setAiPaused(session.id, 60);
             console.log(`[CS-AI] Kasir membalas manual dari HP. AI otomatis paused (60m) untuk ${phoneNumber}.`);
@@ -148,6 +157,10 @@ async function handleIncomingMessage(msg) {
             // Untuk @lid, SELALU kirim tanpa quoted context untuk mencegah WhatsApp client drop/ghosting
             const options = isFromLid ? {} : { quoted: msg };
             const result = await sock.sendMessage(targetSendJid, { text: textToSend }, options);
+            if (result?.key?.id) {
+                botSentMessageIds.add(result.key.id);
+                if (botSentMessageIds.size > 1000) botSentMessageIds.clear();
+            }
 
             // Jika asalnya dari @lid, kirim JUGA paralel ke active device :24 dan phone JID (@s.whatsapp.net)
             // Ini menjamin 100% pesan muncul di HP fisik pelanggan terlepas dari bug multi-device LID.
@@ -156,7 +169,8 @@ async function handleIncomingMessage(msg) {
                 const dev24Jid = `${userPart}:24@lid`;
                 try {
                     console.log(`[CS-AI] Dispatching paralel ke active device 24 (${dev24Jid})...`);
-                    await sock.sendMessage(dev24Jid, { text: textToSend });
+                    const res24 = await sock.sendMessage(dev24Jid, { text: textToSend });
+                    if (res24?.key?.id) botSentMessageIds.add(res24.key.id);
                 } catch (dev24Err) {
                     console.log(`[CS-AI] Dispatch :24 note:`, dev24Err.message);
                 }
@@ -165,7 +179,8 @@ async function handleIncomingMessage(msg) {
                     const phoneJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
                     try {
                         console.log(`[CS-AI] Dispatching paralel ke phone JID (${phoneJid})...`);
-                        await sock.sendMessage(phoneJid, { text: textToSend });
+                        const resPhone = await sock.sendMessage(phoneJid, { text: textToSend });
+                        if (resPhone?.key?.id) botSentMessageIds.add(resPhone.key.id);
                     } catch (phoneErr) {
                         console.log(`[CS-AI] Dispatch phoneJid note:`, phoneErr.message);
                     }
@@ -182,7 +197,9 @@ async function handleIncomingMessage(msg) {
                 if (fallbackJid !== targetSendJid) {
                     try {
                         console.log(`[CS-AI] Mencoba fallback sendMessage ke ${fallbackJid}...`);
-                        return await sock.sendMessage(fallbackJid, { text: textToSend });
+                        const fallbackRes = await sock.sendMessage(fallbackJid, { text: textToSend });
+                        if (fallbackRes?.key?.id) botSentMessageIds.add(fallbackRes.key.id);
+                        return fallbackRes;
                     } catch (fallbackErr) {
                         console.error(`[CS-AI] Fallback sendMessage ke ${fallbackJid} juga gagal:`, fallbackErr.message);
                     }
