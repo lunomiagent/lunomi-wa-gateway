@@ -1,5 +1,5 @@
 const express = require('express');
-const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { createClient } = require('@supabase/supabase-js');
@@ -126,7 +126,9 @@ async function handleIncomingMessage(msg) {
         messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
     }
 
-    const phoneNumber = sessionManager.normalizePhone(jid);
+    // Ekstrak real phone JID jika dikirim via WhatsApp LID
+    const realJid = msg.key?.remoteJidAlt || msg.key?.participantAlt || msg.key?.remoteJid;
+    const phoneNumber = sessionManager.normalizePhone(realJid || jid);
     console.log(`[CS-AI] Pesan masuk dari ${phoneNumber}: "${messageText.substring(0, 80)}..."`);
 
     try {
@@ -153,7 +155,11 @@ async function handleIncomingMessage(msg) {
             const replyMsg = `Boleh banget Kak! Sebentar ya, aku panggilkan tim kasir kita yang lagi jaga di toko buat lanjut ngobrol langsung sama Kakak di sini 😊`;
             await sock.sendMessage(jid, { text: replyMsg });
 
-            const alertText = `🔔 *KASIR HANDOVER ALERT*\n----------------------------------------\n📱 *Pelanggan*: ${phoneNumber}\n💬 *Pesan*: "${messageText}"\n⚠️ *Status*: Pelanggan ingin chat langsung dengan Kasir. AI telah di-pause. Mohon tim kasir lanjut jawab di WA ini!`;
+            // Ambil nama pelanggan jika terdaftar
+            const custName = await sessionManager.getCustomerName(phoneNumber);
+            const customerDisplay = custName ? `*${custName}* (${phoneNumber})` : phoneNumber;
+
+            const alertText = `🔔 *KASIR HANDOVER ALERT*\n----------------------------------------\n📱 *Pelanggan*: ${customerDisplay}\n💬 *Pesan*: "${messageText}"\n⚠️ *Status*: Pelanggan ingin chat langsung dengan Kasir/Admin. AI telah di-pause (${pauseMinutes}m). Mohon tim kasir lanjut jawab di WA ini!`;
             await sendGroupNotification(alertText);
             return;
         }

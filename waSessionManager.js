@@ -27,7 +27,34 @@ const MAX_CONTEXT_MESSAGES = 10;
  */
 function normalizePhone(jid) {
     if (!jid) return '';
-    return jid.replace('@s.whatsapp.net', '').replace('@c.us', '').trim();
+    const raw = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '').trim();
+    if (raw.startsWith('62') && raw.length >= 10) {
+        return '0' + raw.substring(2);
+    }
+    return raw;
+}
+
+/**
+ * Ambil nama pelanggan dari tabel `pelanggan` berdasarkan nomor HP
+ */
+async function getCustomerName(phoneNumber) {
+    if (!phoneNumber) return null;
+    try {
+        const clean = phoneNumber.replace(/[^0-9]/g, '');
+        const with62 = clean.startsWith('0') ? '62' + clean.substring(1) : clean;
+        const withZero = clean.startsWith('62') ? '0' + clean.substring(2) : clean;
+
+        const { data } = await supabase
+            .from('pelanggan')
+            .select('nama')
+            .or(`no_wa.eq.${clean},no_wa.eq.${with62},no_wa.eq.${withZero},nomor_telepon.eq.${clean},nomor_telepon.eq.${withZero}`)
+            .limit(1)
+            .maybeSingle();
+
+        return data?.nama || null;
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -389,6 +416,7 @@ async function isAiGloballyEnabled() {
 module.exports = {
     normalizePhone,
     checkStaffRole,
+    getCustomerName,
     getOrCreateSession,
     isAiPaused,
     setAiPaused,
