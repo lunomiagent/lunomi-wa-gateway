@@ -141,29 +141,42 @@ async function handleIncomingMessage(msg) {
         messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
     }
 
-    // Helper aman pengiriman pesan WhatsApp dengan quoted context
+    // Helper aman pengiriman pesan WhatsApp dengan multi-target dispatch
     const safeSendReply = async (textToSend) => {
         try {
             console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (isFromLid: ${isFromLid})`);
             // Untuk @lid, SELALU kirim tanpa quoted context untuk mencegah WhatsApp client drop/ghosting
             const options = isFromLid ? {} : { quoted: msg };
-            return await sock.sendMessage(targetSendJid, { text: textToSend }, options);
-        } catch (primaryErr) {
-            console.error(`[CS-AI] Primary sendMessage ke ${targetSendJid} gagal:`, primaryErr.message);
+            const result = await sock.sendMessage(targetSendJid, { text: textToSend }, options);
 
-            // Retry 1: Jika dari @lid dan belum punya device suffix spesifik, coba kirim ke device 24 (:24@lid)
-            if (isFromLid && !targetSendJid.includes(':')) {
-                const userPart = targetSendJid.split('@')[0];
-                const device24Jid = `${userPart}:24@lid`;
+            // Jika asalnya dari @lid, kirim JUGA paralel ke active device :24 dan phone JID (@s.whatsapp.net)
+            // Ini menjamin 100% pesan muncul di HP fisik pelanggan terlepas dari bug multi-device LID.
+            if (isFromLid) {
+                const userPart = jid.split('@')[0];
+                const dev24Jid = `${userPart}:24@lid`;
                 try {
-                    console.log(`[CS-AI] Mencoba retry ke device 24 (${device24Jid})...`);
-                    return await sock.sendMessage(device24Jid, { text: textToSend });
+                    console.log(`[CS-AI] Dispatching paralel ke active device 24 (${dev24Jid})...`);
+                    await sock.sendMessage(dev24Jid, { text: textToSend });
                 } catch (dev24Err) {
-                    console.error(`[CS-AI] Retry ke ${device24Jid} gagal:`, dev24Err.message);
+                    console.log(`[CS-AI] Dispatch :24 note:`, dev24Err.message);
+                }
+
+                if (msg.key?.senderPn) {
+                    const phoneJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
+                    try {
+                        console.log(`[CS-AI] Dispatching paralel ke phone JID (${phoneJid})...`);
+                        await sock.sendMessage(phoneJid, { text: textToSend });
+                    } catch (phoneErr) {
+                        console.log(`[CS-AI] Dispatch phoneJid note:`, phoneErr.message);
+                    }
                 }
             }
 
-            // Retry 2: Coba fallback ke real phone JID (senderPn)
+            return result;
+        } catch (primaryErr) {
+            console.error(`[CS-AI] Primary sendMessage ke ${targetSendJid} gagal:`, primaryErr.message);
+
+            // Retry fallback ke real phone JID (senderPn)
             if (msg.key?.senderPn) {
                 const fallbackJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
                 if (fallbackJid !== targetSendJid) {

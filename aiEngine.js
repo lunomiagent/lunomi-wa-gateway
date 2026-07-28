@@ -596,9 +596,9 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
     const candidateModels = [
-        'gemini-3.6-flash',
-        'gemini-3.5-flash',
-        'gemini-flash-latest'
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-1.5-pro'
     ];
     let lastErr = null;
 
@@ -632,10 +632,16 @@ async function runWithGemini(systemPrompt, contextMessages, userMessage, session
                 for (const fc of functionCalls) {
                     toolsCalledLog.push(fc.name);
                     const toolResult = await executeTool(fc.name, fc.args, sessionContext, onOrderCreated, onComplaintCreated);
+                    let responseObj;
+                    try {
+                        responseObj = typeof toolResult === 'string' ? JSON.parse(toolResult) : toolResult;
+                    } catch (_) {
+                        responseObj = { output: toolResult };
+                    }
                     toolResults.push({
                         functionResponse: {
                             name: fc.name,
-                            response: { content: toolResult },
+                            response: typeof responseObj === 'object' && responseObj !== null ? responseObj : { result: responseObj },
                         },
                     });
                 }
