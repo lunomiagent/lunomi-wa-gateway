@@ -8,6 +8,7 @@
  */
 
 const { createClient } = require('@supabase/supabase-js');
+const { classifyStaffVerification } = require('./orderPolicy');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
@@ -61,7 +62,7 @@ async function getCustomerName(phoneNumber) {
  * Cek apakah nomor HP terdaftar sebagai karyawan aktif di Supabase.
  * Nomor disimpan di kolom `no_hp` tabel `karyawan`.
  * Format di DB bisa: 08xxx atau 628xxx → kita coba keduanya.
- * @returns {{ isStaff: boolean, karyawanData: object|null }}
+ * @returns {{ isStaff: boolean, karyawanData: object|null, verified: boolean }}
  */
 async function checkStaffRole(phoneNumber) {
     try {
@@ -74,19 +75,15 @@ async function checkStaffRole(phoneNumber) {
             .select('karyawan_id, nama, no_hp, status, can_access_mobile, can_access_web')
             .or(`no_hp.eq.${withCountryCode},no_hp.eq.${withZero},no_hp.eq.${phoneNumber}`)
             .eq('status', 'aktif')
-            .single();
+            .limit(2);
 
-        if (error && error.code !== 'PGRST116') {
+        if (error) {
             console.error('[SessionManager] Error cek role karyawan:', error.message);
         }
-
-        if (data) {
-            return { isStaff: true, karyawanData: data };
-        }
-        return { isStaff: false, karyawanData: null };
+        return classifyStaffVerification({ data, error });
     } catch (err) {
         console.error('[SessionManager] Unexpected error checkStaffRole:', err.message);
-        return { isStaff: false, karyawanData: null };
+        return { isStaff: false, karyawanData: null, verified: false };
     }
 }
 
@@ -287,10 +284,11 @@ async function logMessage({ sessionId, phoneNumber, direction, messageText, aiMo
  * Simpan draft pesanan dari pelanggan ke tabel wa_orders.
  * @returns {object|null} data pesanan yang tersimpan
  */
-async function saveWaOrder({ sessionId, customerName, phoneNumber, outletCode, orderItems, totalEstimated, notes }) {
+async function saveWaOrder({ orderId, sessionId, customerName, phoneNumber, outletCode, orderItems, totalEstimated, notes }) {
     const { data, error } = await supabase
         .from('wa_orders')
-        .insert({
+        .upsert({
+            id: orderId,
             session_id: sessionId || null,
             customer_name: customerName,
             phone_number: phoneNumber,
@@ -300,16 +298,28 @@ async function saveWaOrder({ sessionId, customerName, phoneNumber, outletCode, o
             status: 'draft_from_wa',
             notes: notes || null,
             created_at: new Date().toISOString(),
-        })
+        }, { onConflict: 'id', ignoreDuplicates: true })
         .select()
-        .single();
+        .maybeSingle();
 
     if (error) {
         console.error('[SessionManager] Gagal simpan wa_orders:', error.message);
         throw error;
     }
 
-    return data;
+    if (data) return data;
+
+    const { data: existing, error: existingError } = await supabase
+        .from('wa_orders')
+        .select('id, session_id, customer_name, phone_number, outlet_code, order_items, total_estimated, status, notes, created_at')
+        .eq('id', orderId)
+        .single();
+    if (existingError) throw new Error(`Gagal membaca ulang idempotent wa_order: ${existingError.message}`);
+    Object.defineProperty(existing, '_idempotentReplay', {
+        value: true,
+        enumerable: false,
+    });
+    return existing;
 }
 
 /**

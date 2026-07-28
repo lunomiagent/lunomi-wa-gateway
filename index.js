@@ -7,6 +7,11 @@ const useSupabaseAuthState = require('./useSupabaseAuth');
 const sessionManager = require('./waSessionManager');
 const aiEngine = require('./aiEngine');
 const { sendReplyToInboundChat } = require('./waReplyDelivery');
+const {
+    createDeliveryTracker,
+    describeReachoutTimeLock,
+} = require('./deliveryTracker');
+const { resolveEffectiveUserRole } = require('./orderPolicy');
 
 const cors = require('cors');
 
@@ -28,6 +33,7 @@ const supabase = createClient(supabaseUrl || 'https://placeholder.supabase.co', 
 let sock = null;
 let isConnected = false;
 let currentQR = null;
+let reachoutRestriction = null;
 
 // ─── Helper: Format Nomor WA ─────────────────────────────────────────────────
 function formatWaNumber(target) {
@@ -98,24 +104,30 @@ function formatComplaintNotification(ticket, phoneNumber) {
 
 // Track ID pesan yang dikirim oleh Bot AI agar tidak memicu self-pausing
 const botSentMessageIds = new Set();
-const pendingDeliveryMessages = new Map();
+const configuredDeliveryTimeout = Number(process.env.WA_DELIVERY_RECEIPT_TIMEOUT_MS || 30000);
+const deliveryReceiptTimeoutMs = Number.isFinite(configuredDeliveryTimeout) && configuredDeliveryTimeout > 0
+    ? configuredDeliveryTimeout
+    : 30000;
+const deliveryTracker = createDeliveryTracker({
+    timeoutMs: deliveryReceiptTimeoutMs,
+    onTimeout: ({ messageId, phoneNumber, targetJid }) => {
+        console.error(`[CS-AI] Delivery UNCONFIRMED_TIMEOUT untuk ${phoneNumber} via ${targetJid} setelah ${deliveryReceiptTimeoutMs}ms (messageId: ${messageId})`);
+    },
+});
 
 function rememberOutboundMessage(delivery, phoneNumber) {
     const messageId = delivery?.message?.key?.id;
     if (!messageId) return null;
 
     botSentMessageIds.add(messageId);
-    pendingDeliveryMessages.set(messageId, {
+    deliveryTracker.track({
+        messageId,
         phoneNumber,
         targetJid: delivery.targetJid,
     });
 
     if (botSentMessageIds.size > 1000) {
         botSentMessageIds.clear();
-    }
-    if (pendingDeliveryMessages.size > 1000) {
-        const oldestMessageId = pendingDeliveryMessages.keys().next().value;
-        pendingDeliveryMessages.delete(oldestMessageId);
     }
 
     return messageId;
@@ -141,8 +153,13 @@ async function handleIncomingMessage(msg) {
     const targetSendJid = jid;
 
     // Nomor HP pelanggan untuk sesi DB & audit log (utamakan senderPn real phone)
-    const rawPhoneJid = msg.key?.senderPn || msg.key?.remoteJidAlt || msg.key?.participantAlt || jid;
+    const phoneIdentityJid = msg.key?.senderPn
+        || msg.key?.remoteJidAlt
+        || msg.key?.participantAlt
+        || (jid.endsWith('@s.whatsapp.net') ? jid : null);
+    const rawPhoneJid = phoneIdentityJid || jid;
     const phoneNumber = sessionManager.normalizePhone(rawPhoneJid);
+    const phoneIdentityVerified = phoneIdentityJid?.endsWith('@s.whatsapp.net') === true;
 
     // Handle pesan dari akun WhatsApp sendiri (fromMe = true)
     if (msg.key?.fromMe) {
@@ -223,9 +240,19 @@ async function handleIncomingMessage(msg) {
             messageText,
         });
 
-        // Deteksi apakah pengirim adalah Owner / Super User / Staff
+        // Verifikasi ulang role pada setiap pesan agar sesi lama atau lookup gagal tidak
+        // pernah memperoleh hak membuat order sebagai pelanggan.
         const ownerPhone = sessionManager.normalizePhone(process.env.DEFAULT_WA_PHONE || '085353726052');
-        const isOwnerOrStaff = session.user_role === 'owner' || session.user_role === 'superadmin' || session.user_role === 'staff' || phoneNumber === ownerPhone;
+        const isOwnerPhone = phoneNumber === ownerPhone;
+        const staffVerification = isOwnerPhone
+            ? { verified: true, isStaff: false }
+            : await sessionManager.checkStaffRole(phoneNumber);
+        const effectiveUserRole = resolveEffectiveUserRole({
+            sessionRole: session.user_role,
+            isOwnerPhone,
+            staffVerification,
+        });
+        const isOwnerOrStaff = effectiveUserRole === 'owner' || effectiveUserRole === 'staff';
 
         // Deteksi secara natural jika pelanggan biasa ingin bicara dengan kasir / manusia
         const lowerMsg = messageText.trim().toLowerCase();
@@ -281,7 +308,13 @@ async function handleIncomingMessage(msg) {
         try {
             aiResult = await aiEngine.processMessage({
                 userMessage: messageText,
-                session: { ...session, context_messages: session.context_messages || [] },
+                session: {
+                    ...session,
+                    user_role: effectiveUserRole,
+                    context_messages: session.context_messages || [],
+                    phone_identity_verified: phoneIdentityVerified,
+                    inbound_message_id: msg.key?.id || null,
+                },
                 karyawanNama,
                 onOrderCreated: async (orderData) => {
                     // Kirim notifikasi order ke WA Group
@@ -397,7 +430,17 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect, qr } = update;
+        const { connection, lastDisconnect, qr, reachoutTimeLock } = update;
+
+        if (reachoutTimeLock) {
+            reachoutRestriction = describeReachoutTimeLock(reachoutTimeLock);
+            const serialized = JSON.stringify(reachoutRestriction);
+            if (reachoutRestriction.active) {
+                console.error(`[WA Gateway] OUTGOING_MESSAGES_RESTRICTED ${serialized}`);
+            } else {
+                console.log(`[WA Gateway] Outgoing message restriction lifted ${serialized}`);
+            }
+        }
         
         if (qr) {
             currentQR = qr;
@@ -472,18 +515,22 @@ async function connectToWhatsApp() {
     sock.ev.on('messages.update', (updates) => {
         for (const { key, update } of updates) {
             const messageId = key?.id;
-            const tracked = messageId ? pendingDeliveryMessages.get(messageId) : null;
-            if (!tracked || typeof update?.status !== 'number') continue;
+            const tracked = deliveryTracker.handleStatus({
+                messageId,
+                status: update?.status,
+                deliveryAckStatus: WAMessageStatus.DELIVERY_ACK,
+                errorStatus: WAMessageStatus.ERROR,
+            });
+            if (!tracked) continue;
 
             const statusName = Object.entries(WAMessageStatus)
                 .find(([, value]) => value === update.status)?.[0] || `UNKNOWN_${update.status}`;
 
-            if (update.status === WAMessageStatus.ERROR) {
-                console.error(`[CS-AI] Delivery ERROR untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
-                pendingDeliveryMessages.delete(messageId);
-            } else if (update.status >= WAMessageStatus.DELIVERY_ACK) {
+            if (tracked.outcome === 'error') {
+                const details = update?.messageStubParameters?.join(', ') || 'detail tidak tersedia';
+                console.error(`[CS-AI] Delivery ERROR untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId}, detail: ${details})`);
+            } else if (tracked.outcome === 'delivered') {
                 console.log(`[CS-AI] Delivery ${statusName} untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
-                pendingDeliveryMessages.delete(messageId);
             } else {
                 console.log(`[CS-AI] Delivery ${statusName} untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
             }
@@ -808,7 +855,13 @@ app.get('/qr', (req, res) => {
 });
 
 app.get('/status', (req, res) => {
-    res.json({ isConnected, hasQR: !!currentQR, aiMode: 'hybrid-gemini-openagentic' });
+    res.json({
+        isConnected,
+        hasQR: !!currentQR,
+        aiMode: 'hybrid-groq-openagentic-gemini',
+        pendingDeliveryReceipts: deliveryTracker.pendingCount(),
+        reachoutRestriction,
+    });
 });
 
 app.post('/api/wa/test-ai', async (req, res) => {

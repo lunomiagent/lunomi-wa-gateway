@@ -23,10 +23,14 @@
 
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const {
+    filterToolsForSession,
+    executeAuthorizedOrder,
+} = require('./orderPolicy');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const groqApiKey = process.env.GROQ_API_KEY || ['gsk', 'bfxvpBJcGrfgVsRdYJaNWGdyb3FYKK19EwV2cY7UQqfIkpXjVWE4'].join('_');
+const groqApiKey = process.env.GROQ_API_KEY;
 const groqBaseUrl = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
 const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 const geminiApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
@@ -142,7 +146,12 @@ ALUR CHAT DIRECT KASIR / HUMAN TAKEOVER (SANGAT NATURAL):
 GUIDELINE STRATEGI REKOMENDASI & PAIRING:
 - Kategori SIGNATURE: Prioritaskan penawaran menu dari Kategori SIGNATURE & ESPRESSO BASED yang tersedia.
 - Strategi Pairing: Saat pelanggan memilih minuman, tawarkan pasangan makanan/snack F&B aktif yang ada di katalog.
-- Panduan Pemesanan: Mengobrol santai ➔ Tanya Dine-in, Takeaway, atau Delivery Beji ➔ Catat via tool 'create_wa_order' ➔ Konfirmasi total harga.
+- Panduan Pemesanan: Mengobrol santai ➔ Tanya Dine-in, Takeaway, atau Delivery Beji ➔ Ringkas item dan total ➔ Minta konfirmasi eksplisit ➔ Baru catat via tool 'create_wa_order'.
+
+ATURAN KEAMANAN PEMESANAN:
+- Kumpulkan nama pelanggan, item katalog, jumlah, jenis layanan, dan outlet tujuan. Tampilkan ringkasan lengkap beserta total lalu tanyakan apakah sudah benar.
+- Minta pelanggan membalas dengan kalimat eksplisit "Ya, saya konfirmasi pesanan ini". Pesan pendek atau ambigu seperti "tes", "ok", "pesan", dan "cek" BUKAN konfirmasi.
+- Gunakan tool 'create_wa_order' hanya setelah balasan konfirmasi eksplisit tersebut. Harga dan total final selalu divalidasi sistem dari katalog.
 
 FORMATTING KETAT WHATSAPP (MINIMALIS & DILARANG BANYAK TANDA BINTANG '*'):
 - DILARANG KERAS menggunakan format tabel markdown (| Menu | Harga |), header markdown (##, ###, #), blockquote (>), atau garis beruntet (===, ---).
@@ -537,9 +546,28 @@ const OPENAI_TOOLS = [
  * Eksekusi function tool berdasarkan nama yang dipanggil AI.
  * @param {string} toolName - nama tool
  * @param {object} toolArgs - argumen dari AI
- * @param {object} sessionContext - { sessionId, phoneNumber }
+ * @param {object} sessionContext - trusted session and current-message context
  * @returns {string} hasil tool sebagai string untuk dikirim kembali ke AI
  */
+async function loadActiveOrderProducts() {
+    const { data, error } = await supabase
+        .from('produk')
+        .select('produk_id, nama, harga_jual')
+        .eq('aktif', true)
+        .eq('tipe', 'menu_fnb');
+    if (error) throw new Error(`Gagal memvalidasi katalog pesanan: ${error.message}`);
+    return data || [];
+}
+
+async function loadValidOrderOutletCodes() {
+    const { data, error } = await supabase
+        .from('outlet')
+        .select('kode')
+        .neq('kode', 'HO');
+    if (error) throw new Error(`Gagal memvalidasi outlet pesanan: ${error.message}`);
+    return (data || []).map(outlet => outlet.kode).filter(Boolean);
+}
+
 async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated) {
     console.log(`[AIEngine] Tool call: ${toolName}`, toolArgs);
 
@@ -560,24 +588,30 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
             return await toolGetAttendanceToday(toolArgs);
 
         case 'get_recipe_hpp':
-            if (sessionContext?.user_role !== 'staff' && sessionContext?.user_role !== 'owner') {
+            if (sessionContext?.userRole !== 'staff' && sessionContext?.userRole !== 'owner') {
                 return 'AKSES DITOLAK: Informasi resep, gramasi bahan baku, HPP modal, dan overhead merupakan rahasia rahasia dapur Cleco Pii dan DILARANG dibocorkan kepada siapapun.';
             }
             return await toolGetRecipeHpp(toolArgs);
 
         case 'create_wa_order': {
             const { saveWaOrder } = require('./waSessionManager');
-            const orderData = await saveWaOrder({
-                sessionId: sessionContext.sessionId,
-                customerName: toolArgs.customer_name,
-                phoneNumber: toolArgs.phone_number || sessionContext.phoneNumber,
-                outletCode: toolArgs.outlet_code,
-                orderItems: toolArgs.order_items,
-                totalEstimated: toolArgs.total_estimated,
-                notes: toolArgs.notes,
-            });
-            if (onOrderCreated) onOrderCreated(orderData);
-            return JSON.stringify({ success: true, order_id: orderData.id, message: 'Pesanan berhasil dicatat dan notifikasi akan dikirim ke tim outlet.' });
+            try {
+                const orderData = await executeAuthorizedOrder({
+                    toolArgs,
+                    sessionContext,
+                    loadCatalogProducts: loadActiveOrderProducts,
+                    loadValidOutletCodes: loadValidOrderOutletCodes,
+                    saveOrder: saveWaOrder,
+                    onOrderCreated,
+                });
+                return JSON.stringify({ success: true, order_id: orderData.id, message: 'Pesanan berhasil dicatat dan notifikasi telah diproses untuk tim outlet.' });
+            } catch (error) {
+                if (error.code === 'ORDER_NOT_AUTHORIZED' || error.code === 'ORDER_VALIDATION_FAILED') {
+                    console.warn(`[AIEngine] create_wa_order ditolak: ${error.message}`);
+                    return JSON.stringify({ success: false, error: error.message });
+                }
+                throw error;
+            }
         }
 
         case 'create_complaint': {
@@ -611,7 +645,13 @@ async function runWithGemini(systemPrompt, contextMessages, userMessage, session
             const model = geminiClient.getGenerativeModel({
                 model: modelName,
                 systemInstruction: systemPrompt,
-                tools: GEMINI_TOOLS,
+                tools: [{
+                    functionDeclarations: filterToolsForSession(
+                        GEMINI_TOOLS[0].functionDeclarations,
+                        sessionContext,
+                        tool => tool?.name
+                    ),
+                }],
             });
 
             // Konversi contextMessages ke format Gemini
@@ -700,7 +740,7 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
                     body: JSON.stringify({
                         model: targetModel,
                         messages,
-                        tools: OPENAI_TOOLS,
+                        tools: filterToolsForSession(OPENAI_TOOLS, sessionContext),
                         tool_choice: 'auto',
                         max_tokens: 1024,
                     }),
@@ -800,7 +840,7 @@ async function runWithGroq(systemPrompt, contextMessages, userMessage, sessionCo
                     body: JSON.stringify({
                         model: targetModel,
                         messages,
-                        tools: OPENAI_TOOLS,
+                        tools: filterToolsForSession(OPENAI_TOOLS, sessionContext),
                         tool_choice: 'auto',
                         max_tokens: 1024,
                     }),
@@ -880,7 +920,15 @@ async function runWithGroq(systemPrompt, contextMessages, userMessage, sessionCo
 async function processMessage({ userMessage, session, karyawanNama, onOrderCreated, onComplaintCreated }) {
     const systemPrompt = await buildSystemPrompt(session.user_role, karyawanNama);
     const contextMessages = session.context_messages || [];
-    const sessionContext = { sessionId: session.id, phoneNumber: session.phone_number };
+    const sessionContext = {
+        sessionId: session.id,
+        phoneNumber: session.phone_number,
+        userRole: session.user_role,
+        currentUserMessage: userMessage,
+        contextMessages,
+        phoneIdentityVerified: session.phone_identity_verified === true,
+        inboundMessageId: session.inbound_message_id || null,
+    };
 
     // 1. Coba Groq API (Llama 3.3 70B Versatile - Ultra-Fast & High Quota)
     if (groqApiKey) {
