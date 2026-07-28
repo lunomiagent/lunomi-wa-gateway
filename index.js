@@ -110,9 +110,18 @@ async function handleIncomingMessage(msg) {
 
     if (!messageText.trim()) return;
 
-    // Ekstrak real phone JID & nomor HP di paling atas (mencegah ReferenceError TDZ)
-    const realJid = msg.key?.remoteJidAlt || msg.key?.participantAlt || msg.key?.remoteJid;
-    const phoneNumber = sessionManager.normalizePhone(realJid || jid);
+    // Resolusi target JID sejati (mengatasi bug multi-device @lid)
+    const resolveTargetJid = () => {
+        if (msg.key?.senderPn) {
+            return msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
+        }
+        return jid; 
+    };
+    const targetSendJid = resolveTargetJid();
+    const isFromLid = jid.includes('@lid');
+
+    // Ekstrak real phone JID & nomor HP untuk session (Gunakan targetSendJid agar tidak terpecah sessionnya)
+    const phoneNumber = sessionManager.normalizePhone(targetSendJid);
 
     // Handle pesan dari akun WhatsApp sendiri (fromMe = true)
     if (msg.key?.fromMe) {
@@ -129,19 +138,14 @@ async function handleIncomingMessage(msg) {
         // Bersihkan prefix test agar AI menjawab pertanyaan utama dengan natural
         messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
     }
-    
-    // Resolusi target JID balasan: Wajib menggunakan remoteJid asli agar Signal session dari Baileys cocok
-    const resolveTargetJid = () => {
-        return jid;
-    };
-    const targetSendJid = resolveTargetJid();
 
     // Helper aman pengiriman pesan WhatsApp dengan quoted context
     const safeSendReply = async (textToSend) => {
         try {
-            console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (isLid: ${targetSendJid.includes('@lid')})`);
-            // Jangan gunakan quoted jika itu lid, karena terkadang bikin error atau tidak muncul
-            const options = targetSendJid.includes('@lid') ? {} : { quoted: msg };
+            console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (isFromLid: ${isFromLid})`);
+            // JANGAN gunakan quoted jika asalnya dari @lid atau dikirim ke JID yang berbeda dari JID asal
+            // Ini untuk mencegah pesan di-drop (ghosting) oleh enkripsi Signal WhatsApp.
+            const options = (isFromLid || targetSendJid !== jid) ? {} : { quoted: msg };
             return await sock.sendMessage(targetSendJid, { text: textToSend }, options);
         } catch (primaryErr) {
             console.error(`[CS-AI] Primary sendMessage gagal ke ${targetSendJid}:`, primaryErr.message);
@@ -157,7 +161,7 @@ async function handleIncomingMessage(msg) {
         }
     };
 
-    console.log(`[CS-AI] Pesan masuk RAW JID: ${jid}, RealJid: ${realJid}`);
+    console.log(`[CS-AI] Pesan masuk RAW JID: ${jid}, Target: ${targetSendJid}`);
     console.log(`[CS-AI] Pesan masuk dari ${phoneNumber} (Target JID: ${targetSendJid}): "${messageText.substring(0, 80)}..."`);
 
     try {
