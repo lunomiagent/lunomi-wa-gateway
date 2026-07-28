@@ -1,11 +1,12 @@
 const express = require('express');
-const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers, WAMessageStatus } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { createClient } = require('@supabase/supabase-js');
 const useSupabaseAuthState = require('./useSupabaseAuth');
 const sessionManager = require('./waSessionManager');
 const aiEngine = require('./aiEngine');
+const { sendReplyToInboundChat } = require('./waReplyDelivery');
 
 const cors = require('cors');
 
@@ -97,24 +98,27 @@ function formatComplaintNotification(ticket, phoneNumber) {
 
 // Track ID pesan yang dikirim oleh Bot AI agar tidak memicu self-pausing
 const botSentMessageIds = new Set();
+const pendingDeliveryMessages = new Map();
 
-// Dapatkan daftar JID perangkat aktif pelanggan dari database wa_sessions (misal :68@lid, :24@lid)
-async function getKnownUserDeviceJids(jid) {
-    if (!jid || !jid.includes('@lid')) return [];
-    const userPart = jid.split('@')[0].split(':')[0];
-    try {
-        const { data } = await supabase
-            .from('wa_sessions')
-            .select('id')
-            .like('id', `session-${userPart}.%`);
-        if (!data || data.length === 0) return [];
-        return data.map(item => {
-            const devId = item.id.replace(`session-${userPart}.`, '');
-            return `${userPart}:${devId}@lid`;
-        });
-    } catch (_) {
-        return [];
+function rememberOutboundMessage(delivery, phoneNumber) {
+    const messageId = delivery?.message?.key?.id;
+    if (!messageId) return null;
+
+    botSentMessageIds.add(messageId);
+    pendingDeliveryMessages.set(messageId, {
+        phoneNumber,
+        targetJid: delivery.targetJid,
+    });
+
+    if (botSentMessageIds.size > 1000) {
+        botSentMessageIds.clear();
     }
+    if (pendingDeliveryMessages.size > 1000) {
+        const oldestMessageId = pendingDeliveryMessages.keys().next().value;
+        pendingDeliveryMessages.delete(oldestMessageId);
+    }
+
+    return messageId;
 }
 
 // ─── AI Message Handler (Private Chat Only) ───────────────────────────────────
@@ -132,18 +136,9 @@ async function handleIncomingMessage(msg) {
 
     if (!messageText.trim()) return;
 
-    // Dapatkan target JID pengiriman paling presisi
-    // Utamakan senderPn (@s.whatsapp.net) jika ada, karena Meta WhatsApp server menjamin pengiriman 100% lurus ke HP user
-    let targetSendJid = jid;
-    if (msg.key?.senderPn) {
-        targetSendJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
-    } else if (msg.key?.participant && msg.key.participant.includes(':')) {
-        targetSendJid = msg.key.participant;
-    } else if (msg.key?.remoteJid && msg.key.remoteJid.includes(':')) {
-        targetSendJid = msg.key.remoteJid;
-    }
-
-    const isFromLid = jid.includes('@lid') || targetSendJid.includes('@lid');
+    // Balas ke exact JID dari stanza inbound agar tetap berada di chat yang sama.
+    // Identitas nomor (senderPn) hanya dipakai sebagai fallback jika primary send gagal.
+    const targetSendJid = jid;
 
     // Nomor HP pelanggan untuk sesi DB & audit log (utamakan senderPn real phone)
     const rawPhoneJid = msg.key?.senderPn || msg.key?.remoteJidAlt || msg.key?.participantAlt || jid;
@@ -176,65 +171,28 @@ async function handleIncomingMessage(msg) {
         messageText = messageText.replace(/^(!test|\[test\]|test|tes|cek|ping)\s*/i, '').trim() || messageText;
     }
 
-    // Helper aman pengiriman pesan WhatsApp dengan multi-target dispatch
+    // Helper pengiriman exact-JID-first dengan satu fallback ke phone JID.
     const safeSendReply = async (textToSend) => {
         try {
-            console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (isFromLid: ${isFromLid})`);
-            // Untuk @lid, SELALU kirim tanpa quoted context untuk mencegah WhatsApp client drop/ghosting
-            const options = isFromLid ? {} : { quoted: msg };
-            const result = await sock.sendMessage(targetSendJid, { text: textToSend }, options);
-            if (result?.key?.id) {
-                botSentMessageIds.add(result.key.id);
-                if (botSentMessageIds.size > 1000) botSentMessageIds.clear();
+            console.log(`[CS-AI] Mengirim balasan ke exact inbound JID ${targetSendJid}`);
+            const delivery = await sendReplyToInboundChat({
+                sock,
+                msg,
+                text: textToSend,
+            });
+            const messageId = rememberOutboundMessage(delivery, phoneNumber);
+
+            if (delivery.usedFallback) {
+                console.warn(`[CS-AI] Primary ${targetSendJid} gagal; stanza disubmit via fallback ${delivery.targetJid} (messageId: ${messageId || 'unknown'})`);
             }
 
-            // Jika asalnya dari @lid, kirim JUGA paralel ke SELURUH device ID aktif pengirim (misal :68@lid, :24@lid)
-            // Ini menjamin 100% pesan muncul di HP fisik pelanggan terlepas dari variasi device ID LID.
-            if (isFromLid) {
-                const knownDeviceJids = await getKnownUserDeviceJids(jid);
-                for (const devJid of knownDeviceJids) {
-                    if (devJid !== targetSendJid) {
-                        try {
-                            console.log(`[CS-AI] Dispatching paralel ke dynamic device (${devJid})...`);
-                            const resDev = await sock.sendMessage(devJid, { text: textToSend });
-                            if (resDev?.key?.id) botSentMessageIds.add(resDev.key.id);
-                        } catch (devErr) {
-                            console.log(`[CS-AI] Dispatch ${devJid} note:`, devErr.message);
-                        }
-                    }
-                }
-
-                if (msg.key?.senderPn) {
-                    const phoneJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
-                    try {
-                        console.log(`[CS-AI] Dispatching paralel ke phone JID (${phoneJid})...`);
-                        const resPhone = await sock.sendMessage(phoneJid, { text: textToSend });
-                        if (resPhone?.key?.id) botSentMessageIds.add(resPhone.key.id);
-                    } catch (phoneErr) {
-                        console.log(`[CS-AI] Dispatch phoneJid note:`, phoneErr.message);
-                    }
-                }
-            }
-
-            return result;
-        } catch (primaryErr) {
-            console.error(`[CS-AI] Primary sendMessage ke ${targetSendJid} gagal:`, primaryErr.message);
-
-            // Retry fallback ke real phone JID (senderPn)
-            if (msg.key?.senderPn) {
-                const fallbackJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
-                if (fallbackJid !== targetSendJid) {
-                    try {
-                        console.log(`[CS-AI] Mencoba fallback sendMessage ke ${fallbackJid}...`);
-                        const fallbackRes = await sock.sendMessage(fallbackJid, { text: textToSend });
-                        if (fallbackRes?.key?.id) botSentMessageIds.add(fallbackRes.key.id);
-                        return fallbackRes;
-                    } catch (fallbackErr) {
-                        console.error(`[CS-AI] Fallback sendMessage ke ${fallbackJid} juga gagal:`, fallbackErr.message);
-                    }
-                }
-            }
-            throw primaryErr;
+            return delivery;
+        } catch (sendError) {
+            const causes = sendError instanceof AggregateError
+                ? sendError.errors.map(error => error?.message || String(error)).join(' | ')
+                : sendError.message;
+            console.error(`[CS-AI] Pengiriman balasan gagal untuk ${phoneNumber}: ${causes}`);
+            throw sendError;
         }
     };
 
@@ -352,8 +310,9 @@ async function handleIncomingMessage(msg) {
         
         // Kirim balasan aman ke WhatsApp pelanggan
         let deliveryError = null;
+        let delivery = null;
         try {
-            await safeSendReply(replyText);
+            delivery = await safeSendReply(replyText);
         } catch (sendErr) {
             deliveryError = sendErr.message || 'Gagal mengirim ke socket WA';
         }
@@ -382,7 +341,11 @@ async function handleIncomingMessage(msg) {
             errorInfo: deliveryError,
         });
 
-        console.log(`[CS-AI] Balasan dikirim ke ${phoneNumber} (model: ${aiResult.model}, tools: ${aiResult.toolsCalled?.join(', ') || 'none'})`);
+        if (deliveryError) {
+            console.error(`[CS-AI] Balasan GAGAL disubmit ke ${phoneNumber}: ${deliveryError}`);
+        } else {
+            console.log(`[CS-AI] Balasan disubmit ke ${delivery.targetJid}; menunggu delivery receipt (messageId: ${delivery.message?.key?.id || 'unknown'}, model: ${aiResult.model}, tools: ${aiResult.toolsCalled?.join(', ') || 'none'})`);
+        }
 
     } catch (err) {
         console.error(`[CS-AI] Unexpected error handling message from ${phoneNumber}:`, err.message);
@@ -486,6 +449,27 @@ async function connectToWhatsApp() {
             handleIncomingMessage(msg).catch(err => {
                 console.error('[CS-AI] Uncaught error in handleIncomingMessage:', err.message);
             });
+        }
+    });
+
+    sock.ev.on('messages.update', (updates) => {
+        for (const { key, update } of updates) {
+            const messageId = key?.id;
+            const tracked = messageId ? pendingDeliveryMessages.get(messageId) : null;
+            if (!tracked || typeof update?.status !== 'number') continue;
+
+            const statusName = Object.entries(WAMessageStatus)
+                .find(([, value]) => value === update.status)?.[0] || `UNKNOWN_${update.status}`;
+
+            if (update.status === WAMessageStatus.ERROR) {
+                console.error(`[CS-AI] Delivery ERROR untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
+                pendingDeliveryMessages.delete(messageId);
+            } else if (update.status >= WAMessageStatus.DELIVERY_ACK) {
+                console.log(`[CS-AI] Delivery ${statusName} untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
+                pendingDeliveryMessages.delete(messageId);
+            } else {
+                console.log(`[CS-AI] Delivery ${statusName} untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
+            }
         }
     });
 }
