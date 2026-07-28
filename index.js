@@ -130,14 +130,9 @@ async function handleIncomingMessage(msg) {
         messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
     }
     
-    // Resolusi target JID balasan: Utamakan real phone JID jika ada, jika tidak gunakan remoteJid asli
+    // Resolusi target JID balasan: Wajib menggunakan remoteJid asli agar Signal session dari Baileys cocok
     const resolveTargetJid = () => {
-        if (msg.key?.senderPn) {
-            return msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
-        }
-        if (realJid && realJid.endsWith('@s.whatsapp.net')) return realJid;
-        if (jid && jid.endsWith('@s.whatsapp.net')) return jid;
-        return jid; // Selalu kembalikan remoteJid asli (termasuk @lid) tanpa konversi palsu
+        return jid;
     };
     const targetSendJid = resolveTargetJid();
 
