@@ -18,6 +18,149 @@ function createMessage(remoteJid = LID_JID) {
     };
 }
 
+test('stores the inbound LID and phone mapping before sending', async () => {
+    const operations = [];
+    const sock = {
+        signalRepository: {
+            lidMapping: {
+                async storeLIDPNMappings(mappings) {
+                    operations.push({ type: 'mapping', mappings });
+                },
+            },
+        },
+        async sendMessage(jid) {
+            operations.push({ type: 'send', jid });
+            return { key: { id: 'mapped-message-id' } };
+        },
+    };
+
+    const result = await sendReplyToInboundChat({
+        sock,
+        msg: createMessage(),
+        text: 'Daftar menu',
+    });
+
+    assert.deepEqual(operations, [
+        {
+            type: 'mapping',
+            mappings: [{ lid: LID_JID, pn: PHONE_JID }],
+        },
+        { type: 'send', jid: LID_JID },
+    ]);
+    assert.equal(result.mappingStored, true);
+    assert.equal(result.mappingError, null);
+});
+
+test('sends to the exact LID when senderPn is unavailable', async () => {
+    const msg = createMessage();
+    delete msg.key.senderPn;
+    const calls = [];
+    const sock = {
+        signalRepository: {
+            lidMapping: {
+                async storeLIDPNMappings() {
+                    throw new Error('mapping must be skipped');
+                },
+            },
+        },
+        async sendMessage(jid) {
+            calls.push(jid);
+            return { key: { id: 'lid-without-pn-message-id' } };
+        },
+    };
+
+    const result = await sendReplyToInboundChat({
+        sock,
+        msg,
+        text: 'Daftar menu',
+    });
+
+    assert.deepEqual(calls, [LID_JID]);
+    assert.equal(result.mappingStored, false);
+    assert.equal(result.mappingError, null);
+});
+
+test('surfaces a mapping failure and still attempts the exact LID', async () => {
+    const calls = [];
+    const sock = {
+        signalRepository: {
+            lidMapping: {
+                async storeLIDPNMappings() {
+                    throw new Error('mapping write failed');
+                },
+            },
+        },
+        async sendMessage(jid) {
+            calls.push(jid);
+            return { key: { id: 'unmapped-message-id' } };
+        },
+    };
+
+    const result = await sendReplyToInboundChat({
+        sock,
+        msg: createMessage(),
+        text: 'Daftar menu',
+    });
+
+    assert.deepEqual(calls, [LID_JID]);
+    assert.equal(result.mappingStored, false);
+    assert.match(result.mappingError.message, /mapping write failed/);
+});
+
+test('preserves the mapping failure when both send targets fail', async () => {
+    const sock = {
+        signalRepository: {
+            lidMapping: {
+                async storeLIDPNMappings() {
+                    throw new Error('mapping write failed');
+                },
+            },
+        },
+        async sendMessage(jid) {
+            throw new Error(`send failed: ${jid}`);
+        },
+    };
+
+    await assert.rejects(
+        sendReplyToInboundChat({
+            sock,
+            msg: createMessage(),
+            text: 'Daftar menu',
+        }),
+        (error) => {
+            assert.equal(error.name, 'AggregateError');
+            assert.match(error.mappingError.message, /mapping write failed/);
+            return true;
+        }
+    );
+});
+
+test('does not store a LID mapping for a phone-JID inbound chat', async () => {
+    let mappingCalls = 0;
+    const sock = {
+        signalRepository: {
+            lidMapping: {
+                async storeLIDPNMappings() {
+                    mappingCalls += 1;
+                },
+            },
+        },
+        async sendMessage() {
+            return { key: { id: 'phone-message-id' } };
+        },
+    };
+
+    const result = await sendReplyToInboundChat({
+        sock,
+        msg: createMessage(PHONE_JID),
+        text: 'Halo',
+    });
+
+    assert.equal(mappingCalls, 0);
+    assert.equal(result.mappingStored, false);
+    assert.equal(result.mappingError, null);
+});
+
 test('uses the exact inbound LID as the only target when the primary send succeeds', async () => {
     const calls = [];
     const sock = {
