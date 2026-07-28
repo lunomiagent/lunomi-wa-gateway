@@ -34,6 +34,77 @@ test('never exposes create_wa_order to staff or owner sessions', () => {
     }
 });
 
+test('customer sessions only receive public CS tools', () => {
+    const tools = [
+        { type: 'function', function: { name: 'get_menu_catalog' } },
+        { type: 'function', function: { name: 'get_outlet_info' } },
+        { type: 'function', function: { name: 'get_stock_status' } },
+        { type: 'function', function: { name: 'get_daily_sales' } },
+        { type: 'function', function: { name: 'get_attendance_today' } },
+        { type: 'function', function: { name: 'get_recipe_hpp' } },
+        { type: 'function', function: { name: 'create_wa_order' } },
+        { type: 'function', function: { name: 'create_complaint' } },
+    ];
+
+    const filtered = filterToolsForSession(tools, {
+        userRole: 'customer',
+        currentUserMessage: 'clecopii',
+        contextMessages: [],
+    });
+
+    assert.deepEqual(filtered.map(tool => tool.function.name), [
+        'get_menu_catalog',
+        'get_outlet_info',
+        'create_complaint',
+    ]);
+});
+
+test('confirmed customer orders never expose internal business tools', () => {
+    const tools = [
+        { type: 'function', function: { name: 'get_menu_catalog' } },
+        { type: 'function', function: { name: 'get_stock_status' } },
+        { type: 'function', function: { name: 'get_daily_sales' } },
+        { type: 'function', function: { name: 'get_attendance_today' } },
+        { type: 'function', function: { name: 'get_recipe_hpp' } },
+        { type: 'function', function: { name: 'create_wa_order' } },
+    ];
+
+    const filtered = filterToolsForSession(tools, {
+        userRole: 'customer',
+        currentUserMessage: 'Ya, saya konfirmasi pesanan ini',
+        contextMessages: pendingContext,
+    });
+
+    assert.deepEqual(filtered.map(tool => tool.function.name), [
+        'get_menu_catalog',
+        'create_wa_order',
+    ]);
+});
+
+test('staff and owner receive internal tools without customer order creation', () => {
+    const tools = [
+        { type: 'function', function: { name: 'get_menu_catalog' } },
+        { type: 'function', function: { name: 'get_daily_sales' } },
+        { type: 'function', function: { name: 'get_attendance_today' } },
+        { type: 'function', function: { name: 'get_recipe_hpp' } },
+        { type: 'function', function: { name: 'create_wa_order' } },
+    ];
+
+    for (const userRole of ['staff', 'owner']) {
+        const filtered = filterToolsForSession(tools, {
+            userRole,
+            currentUserMessage: 'Ya, saya konfirmasi pesanan ini',
+            contextMessages: pendingContext,
+        });
+        assert.deepEqual(filtered.map(tool => tool.function.name), [
+            'get_menu_catalog',
+            'get_daily_sales',
+            'get_attendance_today',
+            'get_recipe_hpp',
+        ]);
+    }
+});
+
 test('generic messages cannot authorize order creation', () => {
     for (const currentUserMessage of [
         'Tes',

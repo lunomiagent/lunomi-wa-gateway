@@ -3,6 +3,17 @@
 const { createHash } = require('node:crypto');
 
 const ORDER_TOOL_NAME = 'create_wa_order';
+const PUBLIC_CS_TOOL_NAMES = new Set([
+    'get_menu_catalog',
+    'get_outlet_info',
+    'create_complaint',
+]);
+const INTERNAL_TOOL_NAMES = new Set([
+    'get_stock_status',
+    'get_daily_sales',
+    'get_attendance_today',
+    'get_recipe_hpp',
+]);
 const AFFIRMATIVE_ORDER_CONFIRMATIONS = new Set([
     'ya saya konfirmasi pesanan ini',
     'saya konfirmasi pesanan ini',
@@ -78,10 +89,20 @@ function createOrderIdempotencyId(sessionId, inboundMessageId) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+function isToolAllowedForSession(toolName, sessionContext) {
+    if (PUBLIC_CS_TOOL_NAMES.has(toolName)) return true;
+
+    const userRole = sessionContext?.userRole;
+    if (userRole === 'staff' || userRole === 'owner') {
+        return INTERNAL_TOOL_NAMES.has(toolName);
+    }
+
+    return toolName === ORDER_TOOL_NAME && isOrderToolAllowed(sessionContext || {});
+}
+
 function filterToolsForSession(tools, sessionContext, nameSelector = tool => tool?.function?.name) {
     if (!Array.isArray(tools)) return [];
-    if (isOrderToolAllowed(sessionContext)) return tools;
-    return tools.filter(tool => nameSelector(tool) !== ORDER_TOOL_NAME);
+    return tools.filter(tool => isToolAllowedForSession(nameSelector(tool), sessionContext));
 }
 
 function canonicalizeOrderPayload({
@@ -213,6 +234,7 @@ module.exports = {
     resolveEffectiveUserRole,
     classifyStaffVerification,
     createOrderIdempotencyId,
+    isToolAllowedForSession,
     filterToolsForSession,
     canonicalizeOrderPayload,
     executeAuthorizedOrder,

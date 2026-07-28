@@ -25,6 +25,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const {
     filterToolsForSession,
+    isToolAllowedForSession,
     executeAuthorizedOrder,
 } = require('./orderPolicy');
 
@@ -50,6 +51,19 @@ function getProviderOrder({ hasGemini, hasOpenAgentic, hasGroq }) {
         hasOpenAgentic && 'openagentic',
         hasGroq && 'groq',
     ].filter(Boolean);
+}
+
+const CUSTOMER_SENSITIVE_RESPONSE_PATTERN = /\b(?:lunomi(?:\s+hub)?|om[sz]et|penjualan\s+harian|absensi|absen(?:si)?\s+karyawan|kehadiran\s+karyawan|hpp|harga\s+pokok|harga\s+modal|modal\s+produk|resep|gramasi|bahan\s+baku|overhead|margin|laba|profit)\b/i;
+const SAFE_CUSTOMER_RESPONSE = 'Halo Kak! Saya bisa bantu seputar menu, harga, lokasi, jam buka, pesanan, atau menghubungkan Kakak dengan kasir Cleco Pii. Ada yang ingin ditanyakan? 😊';
+
+function sanitizeResponseForRole(responseText, userRole) {
+    const text = String(responseText || '');
+    if (userRole === 'staff' || userRole === 'owner') return text;
+    if (CUSTOMER_SENSITIVE_RESPONSE_PATTERN.test(text)) {
+        console.warn(`[AIEngine] Respons berisi informasi internal diblokir untuk role ${userRole || 'unknown'}.`);
+        return SAFE_CUSTOMER_RESPONSE;
+    }
+    return text;
 }
 
 // ─── Inisialisasi Gemini ─────────────────────────────────────────────────────
@@ -435,7 +449,7 @@ const GEMINI_TOOLS = [
         functionDeclarations: [
             {
                 name: 'get_menu_catalog',
-                description: 'Mengambil daftar menu produk Lunomi yang aktif dari database. Gunakan saat pelanggan bertanya tentang menu, harga, atau pilihan produk.',
+                description: 'Mengambil daftar menu Cleco Pii yang aktif. Gunakan saat pelanggan bertanya tentang menu, harga, atau pilihan produk.',
                 parameters: {
                     type: 'OBJECT',
                     properties: {
@@ -446,7 +460,7 @@ const GEMINI_TOOLS = [
             },
             {
                 name: 'get_outlet_info',
-                description: 'Mengambil informasi outlet Lunomi (alamat, kota, kode). Gunakan saat pelanggan bertanya lokasi atau jam operasional.',
+                description: 'Mengambil informasi publik outlet Cleco Pii (alamat, kota, kode). Gunakan saat pelanggan bertanya lokasi atau jam operasional.',
                 parameters: {
                     type: 'OBJECT',
                     properties: {
@@ -543,8 +557,8 @@ const GEMINI_TOOLS = [
 
 // ─── Tool OpenAgentic (OpenAI format) ────────────────────────────────────────
 const OPENAI_TOOLS = [
-    { type: 'function', function: { name: 'get_menu_catalog', description: 'Mengambil daftar menu produk Lunomi yang aktif dari database.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, category: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'get_outlet_info', description: 'Mengambil informasi outlet Lunomi (alamat, kota, kode).', parameters: { type: 'object', properties: { outlet_code: { type: 'string' } } } } },
+    { type: 'function', function: { name: 'get_menu_catalog', description: 'Mengambil daftar menu Cleco Pii yang aktif.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, category: { type: 'string' } } } } },
+    { type: 'function', function: { name: 'get_outlet_info', description: 'Mengambil informasi publik outlet Cleco Pii (alamat, kota, kode).', parameters: { type: 'object', properties: { outlet_code: { type: 'string' } } } } },
     { type: 'function', function: { name: 'get_stock_status', description: 'Mengecek status stok bahan baku yang tipis di outlet.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' } } } } },
     { type: 'function', function: { name: 'get_daily_sales', description: 'Mengambil ringkasan omset dan jumlah transaksi harian per outlet.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, date: { type: 'string' } } } } },
     { type: 'function', function: { name: 'get_attendance_today', description: 'Mengambil data absensi karyawan hari ini per outlet.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, date: { type: 'string' } } } } },
@@ -583,6 +597,14 @@ async function loadValidOrderOutletCodes() {
 async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated) {
     console.log(`[AIEngine] Tool call: ${toolName}`, toolArgs);
 
+    if (!isToolAllowedForSession(toolName, sessionContext)) {
+        console.warn(`[AIEngine] Tool ${toolName} ditolak untuk role ${sessionContext?.userRole || 'unknown'}.`);
+        return JSON.stringify({
+            success: false,
+            error: 'Permintaan ini tidak tersedia untuk sesi tersebut.',
+        });
+    }
+
     switch (toolName) {
         case 'get_menu_catalog':
             return await toolGetMenuCatalog(toolArgs);
@@ -600,9 +622,6 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
             return await toolGetAttendanceToday(toolArgs);
 
         case 'get_recipe_hpp':
-            if (sessionContext?.userRole !== 'staff' && sessionContext?.userRole !== 'owner') {
-                return 'AKSES DITOLAK: Informasi resep, gramasi bahan baku, HPP modal, dan overhead merupakan rahasia rahasia dapur Cleco Pii dan DILARANG dibocorkan kepada siapapun.';
-            }
             return await toolGetRecipeHpp(toolArgs);
 
         case 'create_wa_order': {
@@ -954,7 +973,11 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         hasGroq: Boolean(groqApiKey),
     })) {
         try {
-            return await providerRunners[providerName]();
+            const providerResult = await providerRunners[providerName]();
+            return {
+                ...providerResult,
+                text: sanitizeResponseForRole(providerResult.text, session.user_role),
+            };
         } catch (providerErr) {
             console.error(`[AIEngine] ${providerName} error, mencoba provider berikutnya:`, providerErr.message);
         }
@@ -974,4 +997,5 @@ module.exports = {
     processMessage,
     buildSystemPrompt,
     getProviderOrder,
+    sanitizeResponseForRole,
 };
