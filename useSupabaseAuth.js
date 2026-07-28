@@ -1,14 +1,38 @@
-const { initAuthCreds, BufferJSON, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const { loadBaileys } = require('./baileysRuntime');
 
-module.exports = async function useSupabaseAuthState(supabase) {
+function createAuthStateError(operation, id, error) {
+    const detail = error?.message || String(error);
+    return new Error(
+        `Supabase auth ${operation} failed for [${id}]: ${detail}`,
+        { cause: error }
+    );
+}
+
+module.exports = async function useSupabaseAuthState(
+    supabase,
+    { loadRuntime = loadBaileys } = {}
+) {
+    const {
+        initAuthCreds,
+        BufferJSON,
+        makeCacheableSignalKeyStore,
+        proto,
+    } = await loadRuntime();
+
     const writeData = async (data, id) => {
         try {
-            await supabase
+            const result = await supabase
                 .from('wa_sessions')
-                .upsert({ id, data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)) });
+                .upsert({
+                    id,
+                    data: JSON.parse(
+                        JSON.stringify(data, BufferJSON.replacer)
+                    ),
+                });
+            if (result?.error) throw result.error;
         } catch (error) {
-            console.error(`Error writing auth state to Supabase [${id}]:`, error);
+            throw createAuthStateError('write', id, error);
         }
     };
 
@@ -19,34 +43,41 @@ module.exports = async function useSupabaseAuthState(supabase) {
                 .select('data')
                 .eq('id', id)
                 .single();
-            if (error || !data) return null;
-            return JSON.parse(JSON.stringify(data.data), BufferJSON.reviver);
+
+            if (error?.code === 'PGRST116') return null;
+            if (error) throw error;
+            if (!data) return null;
+
+            return JSON.parse(
+                JSON.stringify(data.data),
+                BufferJSON.reviver
+            );
         } catch (error) {
-            return null;
+            throw createAuthStateError('read', id, error);
         }
     };
 
     const removeData = async (id) => {
         try {
-            await supabase
+            const result = await supabase
                 .from('wa_sessions')
                 .delete()
                 .eq('id', id);
+            if (result?.error) throw result.error;
         } catch (error) {
-            console.error(`Error removing auth state from Supabase [${id}]:`, error);
+            throw createAuthStateError('delete', id, error);
         }
     };
 
     const creds = (await readData('creds')) || initAuthCreds();
 
-    // 1. Buat custom Supabase Store untuk operasi baca-tulis mentah
     const supabaseStore = {
         get: async (type, ids) => {
             const data = {};
             for (const id of ids) {
                 let value = await readData(`${type}-${id}`);
                 if (type === 'app-state-sync-key' && value) {
-                    value = require('@whiskeysockets/baileys').proto.Message.AppStateSyncKeyData.fromObject(value);
+                    value = proto.Message.AppStateSyncKeyData.create(value);
                 }
                 data[id] = value;
             }
@@ -58,37 +89,38 @@ module.exports = async function useSupabaseAuthState(supabase) {
                 for (const id in data[category]) {
                     const value = data[category][id];
                     const key = `${category}-${id}`;
-                    if (value) {
-                        writePromises.push(writeData(value, key));
-                    } else {
-                        writePromises.push(removeData(key));
-                    }
+                    writePromises.push(
+                        value ? writeData(value, key) : removeData(key)
+                    );
                 }
             }
             await Promise.all(writePromises);
-        }
+        },
     };
 
-    // 2. Bungkus dengan `makeCacheableSignalKeyStore` resmi dari Baileys
-    // Ini mengimplementasikan in-memory cache standar produksi untuk mencegah race condition / MAC sync error
     const logger = pino({ level: 'silent' });
-    const cacheableStore = makeCacheableSignalKeyStore(supabaseStore, logger);
+    const cacheableStore = makeCacheableSignalKeyStore(
+        supabaseStore,
+        logger
+    );
 
     return {
         state: {
             creds,
             keys: cacheableStore,
         },
-        saveCreds: () => {
-            return writeData(creds, 'creds');
-        },
+        saveCreds: () => writeData(creds, 'creds'),
         clearSession: async () => {
             try {
-                await supabase.from('wa_sessions').delete().neq('id', 'dummy'); 
-                console.log('✅ Sesi WhatsApp berhasil dibersihkan dari database.');
-            } catch (err) {
-                console.error('Error saat membersihkan sesi:', err);
+                const result = await supabase
+                    .from('wa_sessions')
+                    .delete()
+                    .neq('id', 'dummy');
+                if (result?.error) throw result.error;
+                console.log('Sesi WhatsApp berhasil dibersihkan dari database.');
+            } catch (error) {
+                throw createAuthStateError('clear session', 'all', error);
             }
-        }
+        },
     };
 };
