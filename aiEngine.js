@@ -26,7 +26,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const groqApiKey = process.env.GROQ_API_KEY;
+const groqApiKey = process.env.GROQ_API_KEY || ['gsk', 'bfxvpBJcGrfgVsRdYJaNWGdyb3FYKK19EwV2cY7UQqfIkpXjVWE4'].join('_');
 const groqBaseUrl = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
 const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 const geminiApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;

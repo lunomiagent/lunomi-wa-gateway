@@ -133,15 +133,17 @@ async function handleIncomingMessage(msg) {
     if (!messageText.trim()) return;
 
     // Dapatkan target JID pengiriman paling presisi
-    // Utamakan JID yang memiliki device ID spesifik (misal 193720876068899:24@lid) agar Signal session cocok
+    // Utamakan senderPn (@s.whatsapp.net) jika ada, karena Meta WhatsApp server menjamin pengiriman 100% lurus ke HP user
     let targetSendJid = jid;
-    if (msg.key?.participant && msg.key.participant.includes(':')) {
+    if (msg.key?.senderPn) {
+        targetSendJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
+    } else if (msg.key?.participant && msg.key.participant.includes(':')) {
         targetSendJid = msg.key.participant;
     } else if (msg.key?.remoteJid && msg.key.remoteJid.includes(':')) {
         targetSendJid = msg.key.remoteJid;
     }
 
-    const isFromLid = targetSendJid.includes('@lid') || jid.includes('@lid');
+    const isFromLid = jid.includes('@lid') || targetSendJid.includes('@lid');
 
     // Nomor HP pelanggan untuk sesi DB & audit log (utamakan senderPn real phone)
     const rawPhoneJid = msg.key?.senderPn || msg.key?.remoteJidAlt || msg.key?.participantAlt || jid;
