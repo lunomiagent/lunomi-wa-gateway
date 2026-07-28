@@ -98,6 +98,25 @@ function formatComplaintNotification(ticket, phoneNumber) {
 // Track ID pesan yang dikirim oleh Bot AI agar tidak memicu self-pausing
 const botSentMessageIds = new Set();
 
+// Dapatkan daftar JID perangkat aktif pelanggan dari database wa_sessions (misal :68@lid, :24@lid)
+async function getKnownUserDeviceJids(jid) {
+    if (!jid || !jid.includes('@lid')) return [];
+    const userPart = jid.split('@')[0].split(':')[0];
+    try {
+        const { data } = await supabase
+            .from('wa_sessions')
+            .select('id')
+            .like('id', `session-${userPart}.%`);
+        if (!data || data.length === 0) return [];
+        return data.map(item => {
+            const devId = item.id.replace(`session-${userPart}.`, '');
+            return `${userPart}:${devId}@lid`;
+        });
+    } catch (_) {
+        return [];
+    }
+}
+
 // ─── AI Message Handler (Private Chat Only) ───────────────────────────────────
 async function handleIncomingMessage(msg) {
     const jid = msg.key?.remoteJid;
@@ -162,17 +181,20 @@ async function handleIncomingMessage(msg) {
                 if (botSentMessageIds.size > 1000) botSentMessageIds.clear();
             }
 
-            // Jika asalnya dari @lid, kirim JUGA paralel ke active device :24 dan phone JID (@s.whatsapp.net)
-            // Ini menjamin 100% pesan muncul di HP fisik pelanggan terlepas dari bug multi-device LID.
+            // Jika asalnya dari @lid, kirim JUGA paralel ke SELURUH device ID aktif pengirim (misal :68@lid, :24@lid)
+            // Ini menjamin 100% pesan muncul di HP fisik pelanggan terlepas dari variasi device ID LID.
             if (isFromLid) {
-                const userPart = jid.split('@')[0];
-                const dev24Jid = `${userPart}:24@lid`;
-                try {
-                    console.log(`[CS-AI] Dispatching paralel ke active device 24 (${dev24Jid})...`);
-                    const res24 = await sock.sendMessage(dev24Jid, { text: textToSend });
-                    if (res24?.key?.id) botSentMessageIds.add(res24.key.id);
-                } catch (dev24Err) {
-                    console.log(`[CS-AI] Dispatch :24 note:`, dev24Err.message);
+                const knownDeviceJids = await getKnownUserDeviceJids(jid);
+                for (const devJid of knownDeviceJids) {
+                    if (devJid !== targetSendJid) {
+                        try {
+                            console.log(`[CS-AI] Dispatching paralel ke dynamic device (${devJid})...`);
+                            const resDev = await sock.sendMessage(devJid, { text: textToSend });
+                            if (resDev?.key?.id) botSentMessageIds.add(resDev.key.id);
+                        } catch (devErr) {
+                            console.log(`[CS-AI] Dispatch ${devJid} note:`, devErr.message);
+                        }
+                    }
                 }
 
                 if (msg.key?.senderPn) {

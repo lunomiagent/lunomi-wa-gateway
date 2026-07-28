@@ -596,9 +596,10 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
     const candidateModels = [
-        'gemini-1.5-flash',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash-lite',
         'gemini-2.0-flash',
-        'gemini-1.5-pro'
     ];
     let lastErr = null;
 
