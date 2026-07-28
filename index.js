@@ -144,13 +144,15 @@ async function handleIncomingMessage(msg) {
     // Helper aman pengiriman pesan WhatsApp dengan quoted context
     const safeSendReply = async (textToSend) => {
         try {
-            console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (quoted: ${Boolean(msg)})`);
-            return await sock.sendMessage(targetSendJid, { text: textToSend }, { quoted: msg });
+            console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (isLid: ${targetSendJid.includes('@lid')})`);
+            // Jangan gunakan quoted jika itu lid, karena terkadang bikin error atau tidak muncul
+            const options = targetSendJid.includes('@lid') ? {} : { quoted: msg };
+            return await sock.sendMessage(targetSendJid, { text: textToSend }, options);
         } catch (primaryErr) {
             console.error(`[CS-AI] Primary sendMessage gagal ke ${targetSendJid}:`, primaryErr.message);
             if (jid && jid !== targetSendJid) {
                 try {
-                    return await sock.sendMessage(jid, { text: textToSend }, { quoted: msg });
+                    return await sock.sendMessage(jid, { text: textToSend });
                 } catch (fallbackErr) {
                     console.error(`[CS-AI] Fallback sendMessage ke ${jid} juga gagal:`, fallbackErr.message);
                     throw fallbackErr;
@@ -160,7 +162,8 @@ async function handleIncomingMessage(msg) {
         }
     };
 
-    console.log(`[CS-AI] Pesan masuk dari ${phoneNumber} (JID: ${targetSendJid}): "${messageText.substring(0, 80)}..."`);
+    console.log(`[CS-AI] Pesan masuk RAW JID: ${jid}, RealJid: ${realJid}`);
+    console.log(`[CS-AI] Pesan masuk dari ${phoneNumber} (Target JID: ${targetSendJid}): "${messageText.substring(0, 80)}..."`);
 
     try {
         // Ambil/buat sesi
