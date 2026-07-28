@@ -30,8 +30,6 @@ const geminiApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEM
 const openAgenticApiKey = process.env.OPENAI_API_KEY;
 const openAgenticBaseUrl = process.env.OPENAI_BASE_URL || 'https://openagentic.id/api/v1';
 const openAgenticModel = process.env.LUNOMI_AGENT_MODEL || 'claude-sonnet-4.5';
-const kimiApiKey = process.env.KIMI_API_KEY || process.env.MOONSHOT_API_KEY || 'sk-oI7PccrqxjPJmya191Vj1MbyvDjVDg32mqvGDQMa1X8avwSU';
-const kimiBaseUrl = process.env.KIMI_BASE_URL || process.env.MOONSHOT_BASE_URL || 'https://api.moonshot.ai/v1';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -40,7 +38,7 @@ let geminiClient = null;
 if (geminiApiKey) {
     geminiClient = new GoogleGenerativeAI(geminiApiKey);
 } else {
-    console.warn('[AIEngine] GOOGLE_GENERATIVE_AI_API_KEY tidak disetel. Akan menggunakan fallback OpenAgentic / Kimi.');
+    console.warn('[AIEngine] GOOGLE_GENERATIVE_AI_API_KEY tidak disetel. Akan menggunakan fallback OpenAgentic.');
 }
 
 // ─── System Prompt Builder ───────────────────────────────────────────────────
@@ -767,108 +765,6 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
     throw lastErr || new Error('All OpenAgentic candidate models failed.');
 }
 
-// ─── Kimi Engine (Moonshot AI) ────────────────────────────────────────────────
-async function runWithKimi(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
-    const candidateKimiModels = [
-        'kimi-k3',
-        'kimi-k2.7-code-highspeed',
-        'kimi-k2.7-code',
-        'kimi-k2.6',
-        'kimi-k2.5',
-        'moonshot-v1-8k',
-    ];
-
-    let lastErr = null;
-
-    for (const targetModel of candidateKimiModels) {
-        try {
-            const messages = [
-                { role: 'system', content: systemPrompt },
-                ...(contextMessages || []).map(m => ({ role: m.role, content: m.content })),
-                { role: 'user', content: userMessage },
-            ];
-
-            const toolsCalledLog = [];
-            let maxIterations = 5;
-
-            while (maxIterations-- > 0) {
-                const response = await fetch(`${kimiBaseUrl}/chat/completions`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${kimiApiKey}`,
-                    },
-                    body: JSON.stringify({
-                        model: targetModel,
-                        messages,
-                        tools: OPENAI_TOOLS,
-                        tool_choice: 'auto',
-                        max_tokens: 1024,
-                    }),
-                });
-
-                if (!response.ok) {
-                    const errText = await response.text();
-                    throw new Error(`Kimi API error ${response.status}: ${errText}`);
-                }
-
-                const rawText = await response.text();
-                const jsonText = rawText.split('data:')[0].trim();
-                const data = JSON.parse(jsonText);
-                const choice = data.choices?.[0];
-
-                if (!choice) throw new Error('Kimi: Response tidak valid (tidak ada choices)');
-
-                const assistantMessage = choice.message;
-                messages.push(assistantMessage);
-
-                if (choice.finish_reason === 'tool_calls' && assistantMessage.tool_calls) {
-                    for (const toolCall of assistantMessage.tool_calls) {
-                        const toolName = toolCall.function.name;
-                        let rawArgs = toolCall.function.arguments || '{}';
-                        rawArgs = rawArgs.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
-                        if (rawArgs.includes('```json')) {
-                            rawArgs = rawArgs.split('```json')[1].split('```')[0].trim();
-                        } else if (rawArgs.includes('```')) {
-                            rawArgs = rawArgs.split('```')[1].split('```')[0].trim();
-                        }
-                        let toolArgs = {};
-                        try {
-                            toolArgs = JSON.parse(rawArgs);
-                        } catch (pErr) {
-                            console.warn('[AIEngine] Kimi toolArgs parse note:', pErr.message);
-                        }
-
-                        toolsCalledLog.push(toolName);
-                        const toolResult = await executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated);
-                        messages.push({
-                            role: 'tool',
-                            tool_call_id: toolCall.id,
-                            content: toolResult,
-                        });
-                    }
-                    continue;
-                }
-
-                // Respon final
-                const finalText = assistantMessage.content || '';
-                const tokensUsed = data.usage?.total_tokens || null;
-                return {
-                    text: finalText,
-                    model: targetModel,
-                    toolsCalled: toolsCalledLog.length > 0 ? toolsCalledLog : null,
-                    tokensUsed,
-                };
-            }
-        } catch (err) {
-            console.warn(`[AIEngine] Kimi model ${targetModel} note:`, err.message);
-            lastErr = err;
-        }
-    }
-
-    throw lastErr || new Error('All Kimi candidate models failed.');
-}
-
 // ─── Main Process Message ─────────────────────────────────────────────────────
 /**
  * Proses pesan dari pengguna melalui AI engine.
@@ -885,16 +781,7 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
     const contextMessages = session.context_messages || [];
     const sessionContext = { sessionId: session.id, phoneNumber: session.phone_number };
 
-    // 1. Coba Kimi API (Moonshot AI: kimi-k3, kimi-k2.7-code-highspeed, kimi-k2.6)
-    if (kimiApiKey) {
-        try {
-            return await runWithKimi(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-        } catch (kimiErr) {
-            console.error('[AIEngine] Kimi API error, mencoba fallback ke OpenAgentic:', kimiErr.message);
-        }
-    }
-
-    // 2. Coba OpenAgentic (deepseek-v4-flash / claude-sonnet-4.5)
+    // 1. Coba OpenAgentic (deepseek-v4-flash / claude-sonnet-4.5) terlebih dahulu
     if (openAgenticApiKey) {
         try {
             return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
@@ -903,7 +790,7 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         }
     }
 
-    // 3. Fallback ke Gemini (gemini-2.5-flash, gemini-2.5-flash-lite)
+    // 2. Fallback ke Gemini (gemini-2.5-flash, gemini-2.5-flash-lite)
     if (geminiClient) {
         try {
             return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
@@ -912,7 +799,7 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         }
     }
 
-    // 4. Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
+    // 3. Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
     console.log('[AIEngine] Seluruh AI Model kuota habis / tidak merespon. Menggunakan balasan CS fallback.');
     return {
         text: 'Halo Kak! Terima kasih telah menghubungi Cleco Pii 😊 Tim kasir kami sedang memproses data & siap membantu Kakak. Untuk informasi menu F&B favorit atau pesanan toko, silakan infokan di sini ya Kak! 🙏',
