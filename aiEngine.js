@@ -596,12 +596,9 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
     const candidateModels = [
-        'gemini-2.5-flash',
-        'gemini-1.5-flash-latest',
-        'gemini-2.0-flash-exp',
-        'gemini-2.0-flash',
-        'gemini-1.5-pro-latest',
-        'gemini-1.5-flash'
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-flash-latest'
     ];
     let lastErr = null;
 
@@ -674,7 +671,7 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
     const toolsCalledLog = [];
     let maxIterations = 5;
 
-    const targetModel = (openAgenticModel && !openAgenticModel.includes('claude')) ? openAgenticModel : 'deepseek-v4-flash';
+    const targetModel = openAgenticModel || 'claude-sonnet-4.6';
 
     while (maxIterations-- > 0) {
         const response = await fetch(`${openAgenticBaseUrl}/chat/completions`, {
