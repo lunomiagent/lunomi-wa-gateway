@@ -595,7 +595,14 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
-    const candidateModels = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
+    const candidateModels = [
+        'gemini-2.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-2.0-flash-exp',
+        'gemini-2.0-flash',
+        'gemini-1.5-pro-latest',
+        'gemini-1.5-flash'
+    ];
     let lastErr = null;
 
     for (const modelName of candidateModels) {
@@ -758,25 +765,25 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
     const contextMessages = session.context_messages || [];
     const sessionContext = { sessionId: session.id, phoneNumber: session.phone_number };
 
-    // 1. Coba OpenAgentic (DeepSeek V4 Flash) terlebih dahulu karena stabil & terverifikasi
-    if (openAgenticApiKey) {
-        try {
-            return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-        } catch (openAgenticErr) {
-            console.error('[AIEngine] OpenAgentic error, mencoba fallback ke Gemini:', openAgenticErr.message);
-        }
-    }
-
-    // 2. Fallback ke Gemini
+    // 1. Coba Gemini terlebih dahulu (Google Gemini 2.5 Flash / 1.5-flash-latest) - Gratis & Respon Cepat
     if (geminiClient) {
         try {
             return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
         } catch (geminiErr) {
-            console.error('[AIEngine] Gemini error:', geminiErr.message);
+            console.error('[AIEngine] Gemini error, mencoba fallback ke OpenAgentic:', geminiErr.message);
         }
     }
 
-    throw new Error('Tidak ada AI engine yang tersedia. Periksa OPENAI_API_KEY atau GOOGLE_GENERATIVE_AI_API_KEY.');
+    // 2. Fallback ke OpenAgentic (DeepSeek / Claude / OpenAI)
+    if (openAgenticApiKey) {
+        try {
+            return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
+        } catch (openAgenticErr) {
+            console.error('[AIEngine] OpenAgentic error:', openAgenticErr.message);
+        }
+    }
+
+    throw new Error('Tidak ada AI engine yang tersedia. Periksa GOOGLE_GENERATIVE_AI_API_KEY atau OPENAI_API_KEY.');
 }
 
 module.exports = {
