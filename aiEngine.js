@@ -29,7 +29,7 @@ const supabaseKey = process.env.SUPABASE_KEY;
 const geminiApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
 const openAgenticApiKey = process.env.OPENAI_API_KEY;
 const openAgenticBaseUrl = process.env.OPENAI_BASE_URL || 'https://openagentic.id/api/v1';
-const openAgenticModel = process.env.LUNOMI_AGENT_MODEL || 'deepseek-v4-flash';
+const openAgenticModel = process.env.LUNOMI_AGENT_MODEL || 'claude-sonnet-4.5';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
@@ -762,21 +762,21 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
     const contextMessages = session.context_messages || [];
     const sessionContext = { sessionId: session.id, phoneNumber: session.phone_number };
 
-    // 1. Coba Gemini terlebih dahulu (Google Gemini 2.5 Flash / 1.5-flash-latest) - Gratis & Respon Cepat
-    if (geminiClient) {
-        try {
-            return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-        } catch (geminiErr) {
-            console.error('[AIEngine] Gemini error, mencoba fallback ke OpenAgentic:', geminiErr.message);
-        }
-    }
-
-    // 2. Fallback ke OpenAgentic (DeepSeek / Claude / OpenAI)
+    // 1. Coba OpenAgentic (Claude Sonnet 4.5) terlebih dahulu
     if (openAgenticApiKey) {
         try {
             return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
         } catch (openAgenticErr) {
-            console.error('[AIEngine] OpenAgentic error:', openAgenticErr.message);
+            console.error('[AIEngine] OpenAgentic (Claude Sonnet 4.5) error, mencoba fallback ke Gemini:', openAgenticErr.message);
+        }
+    }
+
+    // 2. Fallback ke Gemini (Google Gemini 3.6 Flash)
+    if (geminiClient) {
+        try {
+            return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
+        } catch (geminiErr) {
+            console.error('[AIEngine] Gemini error:', geminiErr.message);
         }
     }
 
