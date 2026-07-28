@@ -26,6 +26,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
+const groqApiKey = process.env.GROQ_API_KEY;
+const groqBaseUrl = process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1';
+const groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 const geminiApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GEMINI_API_KEY;
 const openAgenticApiKey = process.env.OPENAI_API_KEY;
 const openAgenticBaseUrl = process.env.OPENAI_BASE_URL || 'https://openagentic.id/api/v1';
@@ -765,6 +768,104 @@ async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, se
     throw lastErr || new Error('All OpenAgentic candidate models failed.');
 }
 
+// ─── Groq Engine (Ultra-Fast Llama 3.3 70B & Llama 3.1) ────────────────────────
+async function runWithGroq(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
+    const candidateGroqModels = [
+        groqModel || 'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
+        'mixtral-8x7b-32768',
+        'gemma2-9b-it',
+    ];
+
+    let lastErr = null;
+
+    for (const targetModel of candidateGroqModels) {
+        try {
+            const messages = [
+                { role: 'system', content: systemPrompt },
+                ...(contextMessages || []).map(m => ({ role: m.role, content: m.content })),
+                { role: 'user', content: userMessage },
+            ];
+
+            const toolsCalledLog = [];
+            let maxIterations = 5;
+
+            while (maxIterations-- > 0) {
+                const response = await fetch(`${groqBaseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${groqApiKey}`,
+                    },
+                    body: JSON.stringify({
+                        model: targetModel,
+                        messages,
+                        tools: OPENAI_TOOLS,
+                        tool_choice: 'auto',
+                        max_tokens: 1024,
+                    }),
+                });
+
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`Groq API error ${response.status}: ${errText}`);
+                }
+
+                const data = await response.json();
+                const choice = data.choices?.[0];
+
+                if (!choice) throw new Error('Groq: Response tidak valid (tidak ada choices)');
+
+                const assistantMessage = choice.message;
+                messages.push(assistantMessage);
+
+                if (choice.finish_reason === 'tool_calls' && assistantMessage.tool_calls) {
+                    for (const toolCall of assistantMessage.tool_calls) {
+                        const toolName = toolCall.function.name;
+                        let rawArgs = toolCall.function.arguments || '{}';
+                        rawArgs = rawArgs.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+                        if (rawArgs.includes('```json')) {
+                            rawArgs = rawArgs.split('```json')[1].split('```')[0].trim();
+                        } else if (rawArgs.includes('```')) {
+                            rawArgs = rawArgs.split('```')[1].split('```')[0].trim();
+                        }
+                        let toolArgs = {};
+                        try {
+                            toolArgs = JSON.parse(rawArgs);
+                        } catch (pErr) {
+                            console.warn('[AIEngine] Groq toolArgs parse note:', pErr.message);
+                        }
+
+                        toolsCalledLog.push(toolName);
+                        const toolResult = await executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated);
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: toolCall.id,
+                            content: toolResult,
+                        });
+                    }
+                    continue;
+                }
+
+                // Respon final
+                const finalText = assistantMessage.content || '';
+                const tokensUsed = data.usage?.total_tokens || null;
+                return {
+                    text: finalText,
+                    model: targetModel,
+                    toolsCalled: toolsCalledLog.length > 0 ? toolsCalledLog : null,
+                    tokensUsed,
+                };
+            }
+        } catch (err) {
+            console.warn(`[AIEngine] Groq model ${targetModel} note:`, err.message);
+            lastErr = err;
+        }
+    }
+
+    throw lastErr || new Error('All Groq candidate models failed.');
+}
+
 // ─── Main Process Message ─────────────────────────────────────────────────────
 /**
  * Proses pesan dari pengguna melalui AI engine.
@@ -781,7 +882,16 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
     const contextMessages = session.context_messages || [];
     const sessionContext = { sessionId: session.id, phoneNumber: session.phone_number };
 
-    // 1. Coba OpenAgentic (deepseek-v4-flash / claude-sonnet-4.5) terlebih dahulu
+    // 1. Coba Groq API (Llama 3.3 70B Versatile - Ultra-Fast & High Quota)
+    if (groqApiKey) {
+        try {
+            return await runWithGroq(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
+        } catch (groqErr) {
+            console.error('[AIEngine] Groq API error, mencoba fallback ke OpenAgentic:', groqErr.message);
+        }
+    }
+
+    // 2. Coba OpenAgentic (deepseek-v4-flash / claude-sonnet-4.5)
     if (openAgenticApiKey) {
         try {
             return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
@@ -790,7 +900,7 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         }
     }
 
-    // 2. Fallback ke Gemini (gemini-2.5-flash, gemini-2.5-flash-lite)
+    // 3. Fallback ke Gemini (gemini-2.5-flash, gemini-2.5-flash-lite)
     if (geminiClient) {
         try {
             return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
@@ -799,7 +909,7 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         }
     }
 
-    // 3. Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
+    // 4. Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
     console.log('[AIEngine] Seluruh AI Model kuota habis / tidak merespon. Menggunakan balasan CS fallback.');
     return {
         text: 'Halo Kak! Terima kasih telah menghubungi Cleco Pii 😊 Tim kasir kami sedang memproses data & siap membantu Kakak. Untuk informasi menu F&B favorit atau pesanan toko, silakan infokan di sini ya Kak! 🙏',
