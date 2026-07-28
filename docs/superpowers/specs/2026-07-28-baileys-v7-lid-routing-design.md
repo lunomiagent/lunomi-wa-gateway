@@ -1,7 +1,7 @@
 # Baileys v7 LID Routing Migration Design
 
 Date: 2026-07-28
-Status: Proposed
+Status: Approved
 Repository: `lunomi-wa-gateway`
 
 ## Problem
