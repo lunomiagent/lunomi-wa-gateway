@@ -110,9 +110,16 @@ async function handleIncomingMessage(msg) {
 
     if (!messageText.trim()) return;
 
-    // targetSendJid harus PERSIS sama dengan jid tempat pesan itu berasal (@lid atau @s.whatsapp.net)
-    const targetSendJid = jid;
-    const isFromLid = jid.includes('@lid');
+    // Dapatkan target JID pengiriman paling presisi
+    // Utamakan JID yang memiliki device ID spesifik (misal 193720876068899:24@lid) agar Signal session cocok
+    let targetSendJid = jid;
+    if (msg.key?.participant && msg.key.participant.includes(':')) {
+        targetSendJid = msg.key.participant;
+    } else if (msg.key?.remoteJid && msg.key.remoteJid.includes(':')) {
+        targetSendJid = msg.key.remoteJid;
+    }
+
+    const isFromLid = targetSendJid.includes('@lid') || jid.includes('@lid');
 
     // Nomor HP pelanggan untuk sesi DB & audit log (utamakan senderPn real phone)
     const rawPhoneJid = msg.key?.senderPn || msg.key?.remoteJidAlt || msg.key?.participantAlt || jid;
@@ -143,16 +150,28 @@ async function handleIncomingMessage(msg) {
             return await sock.sendMessage(targetSendJid, { text: textToSend }, options);
         } catch (primaryErr) {
             console.error(`[CS-AI] Primary sendMessage ke ${targetSendJid} gagal:`, primaryErr.message);
-            // Fallback: Jika @lid gagal, coba kirim ke real phone JID (senderPn)
+
+            // Retry 1: Jika dari @lid dan belum punya device suffix spesifik, coba kirim ke device 24 (:24@lid)
+            if (isFromLid && !targetSendJid.includes(':')) {
+                const userPart = targetSendJid.split('@')[0];
+                const device24Jid = `${userPart}:24@lid`;
+                try {
+                    console.log(`[CS-AI] Mencoba retry ke device 24 (${device24Jid})...`);
+                    return await sock.sendMessage(device24Jid, { text: textToSend });
+                } catch (dev24Err) {
+                    console.error(`[CS-AI] Retry ke ${device24Jid} gagal:`, dev24Err.message);
+                }
+            }
+
+            // Retry 2: Coba fallback ke real phone JID (senderPn)
             if (msg.key?.senderPn) {
                 const fallbackJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
                 if (fallbackJid !== targetSendJid) {
                     try {
-                        console.log(`[CS-AI] Mencoba fallback sendMessage ke ${fallbackJid}`);
+                        console.log(`[CS-AI] Mencoba fallback sendMessage ke ${fallbackJid}...`);
                         return await sock.sendMessage(fallbackJid, { text: textToSend });
                     } catch (fallbackErr) {
                         console.error(`[CS-AI] Fallback sendMessage ke ${fallbackJid} juga gagal:`, fallbackErr.message);
-                        throw fallbackErr;
                     }
                 }
             }
@@ -160,6 +179,7 @@ async function handleIncomingMessage(msg) {
         }
     };
 
+    console.log(`[CS-AI] Incoming key:`, JSON.stringify(msg.key));
     console.log(`[CS-AI] Pesan masuk RAW JID: ${jid}, Target: ${targetSendJid}, Phone: ${phoneNumber}`);
     console.log(`[CS-AI] Pesan masuk dari ${phoneNumber} (Target JID: ${targetSendJid}): "${messageText.substring(0, 80)}..."`);
 
