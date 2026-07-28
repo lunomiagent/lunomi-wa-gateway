@@ -129,7 +129,41 @@ async function handleIncomingMessage(msg) {
     // Ekstrak real phone JID jika dikirim via WhatsApp LID
     const realJid = msg.key?.remoteJidAlt || msg.key?.participantAlt || msg.key?.remoteJid;
     const phoneNumber = sessionManager.normalizePhone(realJid || jid);
-    console.log(`[CS-AI] Pesan masuk dari ${phoneNumber}: "${messageText.substring(0, 80)}..."`);
+    
+    // Resolusi target JID balasan: Utamakan 628xxx@s.whatsapp.net / remoteJidAlt agar pesan dipastikan masuk ke HP pembeli
+    const resolveTargetJid = () => {
+        if (realJid && realJid.endsWith('@s.whatsapp.net')) return realJid;
+        if (jid && jid.endsWith('@s.whatsapp.net')) return jid;
+        if (phoneNumber) {
+            let digits = phoneNumber.replace(/[^0-9]/g, '');
+            if (digits.startsWith('0')) digits = '62' + digits.substring(1);
+            if (digits.startsWith('62') && digits.length >= 10 && digits.length <= 15) {
+                return digits + '@s.whatsapp.net';
+            }
+        }
+        return jid;
+    };
+    const targetSendJid = resolveTargetJid();
+
+    // Helper aman pengiriman pesan WhatsApp dengan quoted context & fallback
+    const safeSendReply = async (textToSend) => {
+        try {
+            return await sock.sendMessage(targetSendJid, { text: textToSend }, { quoted: msg });
+        } catch (primaryErr) {
+            console.error(`[CS-AI] Primary sendMessage gagal ke ${targetSendJid}:`, primaryErr.message);
+            if (jid && jid !== targetSendJid) {
+                try {
+                    return await sock.sendMessage(jid, { text: textToSend }, { quoted: msg });
+                } catch (fallbackErr) {
+                    console.error(`[CS-AI] Fallback sendMessage ke ${jid} juga gagal:`, fallbackErr.message);
+                    throw fallbackErr;
+                }
+            }
+            throw primaryErr;
+        }
+    };
+
+    console.log(`[CS-AI] Pesan masuk dari ${phoneNumber} (JID: ${targetSendJid}): "${messageText.substring(0, 80)}..."`);
 
     try {
         // Ambil/buat sesi
@@ -153,7 +187,7 @@ async function handleIncomingMessage(msg) {
             
             // Balasan hangat dan sangat natural seperti manusia (tanpa kode command kaku)
             const replyMsg = `Boleh banget Kak! Sebentar ya, aku panggilkan tim kasir kita yang lagi jaga di toko buat lanjut ngobrol langsung sama Kakak di sini 😊`;
-            await sock.sendMessage(jid, { text: replyMsg });
+            await safeSendReply(replyMsg);
 
             // Ambil nama pelanggan jika terdaftar
             const custName = await sessionManager.getCustomerName(phoneNumber);
@@ -179,7 +213,7 @@ async function handleIncomingMessage(msg) {
         }
 
         // Tandai "typing..." (mengetik indicator)
-        await sock.sendPresenceUpdate('composing', jid);
+        try { await sock.sendPresenceUpdate('composing', targetSendJid); } catch (_) {}
 
         // Ambil nama karyawan jika role staff
         let karyawanNama = null;
@@ -191,9 +225,6 @@ async function handleIncomingMessage(msg) {
                 .single();
             karyawanNama = karyawan?.nama || null;
         }
-
-        // Kirim indikator "sedang mengetik..." (composing) di WhatsApp
-        try { await sock.sendPresenceUpdate('composing', jid); } catch (_) {}
 
         // Proses dengan AI Engine
         let aiResult;
@@ -218,7 +249,7 @@ async function handleIncomingMessage(msg) {
             console.error('[CS-AI] AI Engine error:', aiErr.message);
             // Fallback response jika AI error total
             const fallbackText = 'Mohon maaf Kak, sistem kami sedang memproses data. Tim kasir kami akan segera membantu Kakak ya! 🙏';
-            await sock.sendMessage(jid, { text: fallbackText });
+            try { await safeSendReply(fallbackText); } catch (_) {}
             await sessionManager.logMessage({
                 sessionId: session.id,
                 phoneNumber,
@@ -236,8 +267,15 @@ async function handleIncomingMessage(msg) {
         await delay(typingDelayMs);
 
         // Hentikan typing indicator & kirim balasan AI
-        try { await sock.sendPresenceUpdate('paused', jid); } catch (_) {}
-        await sock.sendMessage(jid, { text: replyText });
+        try { await sock.sendPresenceUpdate('paused', targetSendJid); } catch (_) {}
+        
+        // Kirim balasan aman ke WhatsApp pelanggan
+        let deliveryError = null;
+        try {
+            await safeSendReply(replyText);
+        } catch (sendErr) {
+            deliveryError = sendErr.message || 'Gagal mengirim ke socket WA';
+        }
 
         // Update context messages
         const updatedContext = await sessionManager.updateContextMessages(
@@ -258,8 +296,9 @@ async function handleIncomingMessage(msg) {
             direction: 'outbound',
             messageText: replyText,
             aiModel: aiResult.model,
-            toolsCalled: aiResult.toolsCalled,
             tokensUsed: aiResult.tokensUsed,
+            toolsCalled: aiResult.toolsCalled,
+            errorInfo: deliveryError,
         });
 
         console.log(`[CS-AI] Balasan dikirim ke ${phoneNumber} (model: ${aiResult.model}, tools: ${aiResult.toolsCalled?.join(', ') || 'none'})`);
