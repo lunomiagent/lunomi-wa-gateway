@@ -132,6 +132,9 @@ async function handleIncomingMessage(msg) {
     
     // Resolusi target JID balasan: Utamakan 628xxx@s.whatsapp.net / remoteJidAlt agar pesan dipastikan masuk ke HP pembeli
     const resolveTargetJid = () => {
+        if (msg.key?.senderPn) {
+            return msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
+        }
         if (realJid && realJid.endsWith('@s.whatsapp.net')) return realJid;
         if (jid && jid.endsWith('@s.whatsapp.net')) return jid;
         if (phoneNumber) {
@@ -145,13 +148,30 @@ async function handleIncomingMessage(msg) {
     };
     const targetSendJid = resolveTargetJid();
 
-    // Helper aman pengiriman pesan WhatsApp dengan quoted context & fallback
+    // Helper aman pengiriman pesan WhatsApp dengan quoted context & LID-to-PN resolution
     const safeSendReply = async (textToSend) => {
+        let sendJid = targetSendJid;
+
+        // Jika target masih bertipe @lid, coba resolve ke @s.whatsapp.net via onWhatsApp
+        if (sendJid.endsWith('@lid')) {
+            try {
+                const queryTarget = phoneNumber && !phoneNumber.includes('@') ? phoneNumber : sendJid;
+                const onWaResults = await sock.onWhatsApp(queryTarget);
+                if (Array.isArray(onWaResults) && onWaResults.length > 0 && onWaResults[0]?.jid) {
+                    console.log(`[CS-AI] Successful LID resolution: ${sendJid} -> ${onWaResults[0].jid}`);
+                    sendJid = onWaResults[0].jid;
+                }
+            } catch (onWaErr) {
+                console.warn('[CS-AI] onWhatsApp resolution note:', onWaErr.message);
+            }
+        }
+
         try {
-            return await sock.sendMessage(targetSendJid, { text: textToSend }, { quoted: msg });
+            console.log(`[CS-AI] Mengirim balasan ke ${sendJid} (quoted: ${Boolean(msg)})`);
+            return await sock.sendMessage(sendJid, { text: textToSend }, { quoted: msg });
         } catch (primaryErr) {
-            console.error(`[CS-AI] Primary sendMessage gagal ke ${targetSendJid}:`, primaryErr.message);
-            if (jid && jid !== targetSendJid) {
+            console.error(`[CS-AI] Primary sendMessage gagal ke ${sendJid}:`, primaryErr.message);
+            if (jid && jid !== sendJid) {
                 try {
                     return await sock.sendMessage(jid, { text: textToSend }, { quoted: msg });
                 } catch (fallbackErr) {
