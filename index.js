@@ -158,11 +158,16 @@ async function handleIncomingMessage(msg) {
         const lower = messageText.trim().toLowerCase();
         const isSelfTest = /^(!test|\[test\]|test|tes|cek|ping|p|halo|hi|hello)/i.test(lower);
         if (!isSelfTest) {
-            // Hanya jika manusia membalas manual dari HP kasir ke pelanggan lain -> Pause AI 60m
-            const session = await sessionManager.getOrCreateSession(phoneNumber);
-            await sessionManager.setAiPaused(session.id, 60);
-            console.log(`[CS-AI] Kasir membalas manual dari HP. AI otomatis paused (60m) untuk ${phoneNumber}.`);
-            return;
+            const botOwnerPhone = sessionManager.normalizePhone(process.env.DEFAULT_WA_PHONE || '085353726052');
+            if (phoneNumber === botOwnerPhone) {
+                console.log(`[CS-AI] Self-chat terdeteksi pada nomor bot/owner (${phoneNumber}). AI tetap aktif.`);
+            } else {
+                // Hanya jika manusia membalas manual dari HP kasir ke PELANGGAN LAIN -> Pause AI 60m untuk pelanggan tersebut
+                const session = await sessionManager.getOrCreateSession(phoneNumber);
+                await sessionManager.setAiPaused(session.id, 60);
+                console.log(`[CS-AI] Kasir membalas manual dari HP ke pelanggan ${phoneNumber}. AI otomatis paused (60m).`);
+                return;
+            }
         }
 
         // Bersihkan prefix test agar AI menjawab pertanyaan utama dengan natural
