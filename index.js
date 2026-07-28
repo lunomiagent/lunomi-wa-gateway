@@ -252,9 +252,13 @@ async function handleIncomingMessage(msg) {
             messageText,
         });
 
-        // Deteksi secara natural jika pelanggan ingin bicara dengan kasir / manusia
+        // Deteksi apakah pengirim adalah Owner / Super User / Staff
+        const ownerPhone = sessionManager.normalizePhone(process.env.DEFAULT_WA_PHONE || '085353726052');
+        const isOwnerOrStaff = session.user_role === 'owner' || session.user_role === 'superadmin' || session.user_role === 'staff' || phoneNumber === ownerPhone;
+
+        // Deteksi secara natural jika pelanggan biasa ingin bicara dengan kasir / manusia
         const lowerMsg = messageText.trim().toLowerCase();
-        const isKasirRequest = lowerMsg.includes('kasir') || lowerMsg.includes('admin') || lowerMsg.includes('manusia') || lowerMsg.includes('hubungi mas') || lowerMsg.includes('hubungi mba') || lowerMsg.includes('bicara langsung') || lowerMsg.includes('stop ai') || lowerMsg === '!kasir' || lowerMsg === '!stop';
+        const isKasirRequest = !isOwnerOrStaff && (lowerMsg.includes('kasir') || lowerMsg.includes('admin') || lowerMsg.includes('manusia') || lowerMsg.includes('hubungi mas') || lowerMsg.includes('hubungi mba') || lowerMsg.includes('bicara langsung') || lowerMsg.includes('stop ai') || lowerMsg === '!kasir' || lowerMsg === '!stop');
 
         if (isKasirRequest) {
             const pauseMinutes = await sessionManager.getPauseDurationMinutes();
@@ -273,8 +277,8 @@ async function handleIncomingMessage(msg) {
             return;
         }
 
-        // Cek apakah AI sedang di-pause (human takeover aktif)
-        const paused = await sessionManager.isAiPaused(session);
+        // Cek apakah AI sedang di-pause (hanya untuk pelanggan biasa)
+        const paused = isOwnerOrStaff ? false : await sessionManager.isAiPaused(session);
         if (paused) {
             console.log(`[CS-AI] AI paused untuk ${phoneNumber}. Pesan diabaikan (human handling).`);
             return;
