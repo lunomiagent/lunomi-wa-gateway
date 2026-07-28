@@ -596,13 +596,9 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
 // ─── Gemini Engine ────────────────────────────────────────────────────────────
 async function runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
     const candidateModels = [
-        'gemini-1.5-flash-latest',
-        'gemini-1.5-flash-8b',
-        'gemini-1.5-pro-latest',
-        'gemini-2.0-flash-exp',
         'gemini-1.5-flash',
-        'gemini-1.5-pro',
         'gemini-2.0-flash',
+        'gemini-1.5-pro'
     ];
     let lastErr = null;
 
@@ -672,88 +668,100 @@ async function runWithGemini(systemPrompt, contextMessages, userMessage, session
 
 // ─── OpenAgentic (OpenAI-compatible) Fallback Engine ─────────────────────────
 async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
-    const messages = [
-        { role: 'system', content: systemPrompt },
-        ...(contextMessages || []).map(m => ({ role: m.role, content: m.content })),
-        { role: 'user', content: userMessage },
+    const candidateOpenAgenticModels = [
+        'deepseek-v4-flash',
+        openAgenticModel || 'claude-sonnet-4.5',
     ];
 
-    const toolsCalledLog = [];
-    let maxIterations = 5;
+    let lastErr = null;
 
-    const targetModel = openAgenticModel || 'claude-sonnet-4.6';
+    for (const targetModel of candidateOpenAgenticModels) {
+        try {
+            const messages = [
+                { role: 'system', content: systemPrompt },
+                ...(contextMessages || []).map(m => ({ role: m.role, content: m.content })),
+                { role: 'user', content: userMessage },
+            ];
 
-    while (maxIterations-- > 0) {
-        const response = await fetch(`${openAgenticBaseUrl}/chat/completions`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${openAgenticApiKey}`,
-            },
-            body: JSON.stringify({
-                model: targetModel,
-                messages,
-                tools: OPENAI_TOOLS,
-                tool_choice: 'auto',
-                max_tokens: 1024,
-            }),
-        });
+            const toolsCalledLog = [];
+            let maxIterations = 5;
 
-        if (!response.ok) {
-            const errText = await response.text();
-            throw new Error(`OpenAgentic API error ${response.status}: ${errText}`);
-        }
-
-        const rawText = await response.text();
-        const jsonText = rawText.split('data:')[0].trim();
-        const data = JSON.parse(jsonText);
-        const choice = data.choices?.[0];
-
-        if (!choice) throw new Error('OpenAgentic: Response tidak valid (tidak ada choices)');
-
-        const assistantMessage = choice.message;
-        messages.push(assistantMessage);
-
-        if (choice.finish_reason === 'tool_calls' && assistantMessage.tool_calls) {
-            for (const toolCall of assistantMessage.tool_calls) {
-                const toolName = toolCall.function.name;
-                let rawArgs = toolCall.function.arguments || '{}';
-                rawArgs = rawArgs.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
-                if (rawArgs.includes('```json')) {
-                    rawArgs = rawArgs.split('```json')[1].split('```')[0].trim();
-                } else if (rawArgs.includes('```')) {
-                    rawArgs = rawArgs.split('```')[1].split('```')[0].trim();
-                }
-                let toolArgs = {};
-                try {
-                    toolArgs = JSON.parse(rawArgs);
-                } catch (pErr) {
-                    console.warn('[AIEngine] OpenAgentic toolArgs parse note:', pErr.message);
-                }
-
-                toolsCalledLog.push(toolName);
-                const toolResult = await executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated);
-                messages.push({
-                    role: 'tool',
-                    tool_call_id: toolCall.id,
-                    content: toolResult,
+            while (maxIterations-- > 0) {
+                const response = await fetch(`${openAgenticBaseUrl}/chat/completions`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${openAgenticApiKey}`,
+                    },
+                    body: JSON.stringify({
+                        model: targetModel,
+                        messages,
+                        tools: OPENAI_TOOLS,
+                        tool_choice: 'auto',
+                        max_tokens: 1024,
+                    }),
                 });
-            }
-            continue; // Loop lagi dengan tool results
-        }
 
-        // Respon final
-        const finalText = assistantMessage.content || '';
-        const tokensUsed = data.usage?.total_tokens || null;
-        return {
-            text: finalText,
-            model: openAgenticModel,
-            toolsCalled: toolsCalledLog.length > 0 ? toolsCalledLog : null,
-            tokensUsed,
-        };
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(`OpenAgentic API error ${response.status}: ${errText}`);
+                }
+
+                const rawText = await response.text();
+                const jsonText = rawText.split('data:')[0].trim();
+                const data = JSON.parse(jsonText);
+                const choice = data.choices?.[0];
+
+                if (!choice) throw new Error('OpenAgentic: Response tidak valid (tidak ada choices)');
+
+                const assistantMessage = choice.message;
+                messages.push(assistantMessage);
+
+                if (choice.finish_reason === 'tool_calls' && assistantMessage.tool_calls) {
+                    for (const toolCall of assistantMessage.tool_calls) {
+                        const toolName = toolCall.function.name;
+                        let rawArgs = toolCall.function.arguments || '{}';
+                        rawArgs = rawArgs.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+                        if (rawArgs.includes('```json')) {
+                            rawArgs = rawArgs.split('```json')[1].split('```')[0].trim();
+                        } else if (rawArgs.includes('```')) {
+                            rawArgs = rawArgs.split('```')[1].split('```')[0].trim();
+                        }
+                        let toolArgs = {};
+                        try {
+                            toolArgs = JSON.parse(rawArgs);
+                        } catch (pErr) {
+                            console.warn('[AIEngine] OpenAgentic toolArgs parse note:', pErr.message);
+                        }
+
+                        toolsCalledLog.push(toolName);
+                        const toolResult = await executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated);
+                        messages.push({
+                            role: 'tool',
+                            tool_call_id: toolCall.id,
+                            content: toolResult,
+                        });
+                    }
+                    continue; // Loop lagi dengan tool results
+                }
+
+                // Respon final
+                const finalText = assistantMessage.content || '';
+                const tokensUsed = data.usage?.total_tokens || null;
+                return {
+                    text: finalText,
+                    model: targetModel,
+                    toolsCalled: toolsCalledLog.length > 0 ? toolsCalledLog : null,
+                    tokensUsed,
+                };
+            }
+        } catch (err) {
+            console.warn(`[AIEngine] OpenAgentic model ${targetModel} note:`, err.message);
+            lastErr = err;
+        }
     }
 
-    throw new Error('OpenAgentic: Terlalu banyak iterasi tool calling tanpa respon final.');
+    throw lastErr || new Error('All OpenAgentic candidate models failed.');
 }
 
 // ─── Main Process Message ─────────────────────────────────────────────────────
