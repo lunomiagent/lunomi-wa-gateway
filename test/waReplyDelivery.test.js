@@ -51,6 +51,35 @@ test('stores the inbound LID and phone mapping before sending', async () => {
     assert.equal(result.mappingError, null);
 });
 
+test('stores an rc13 private-chat mapping from remoteJidAlt', async () => {
+    const msg = createMessage();
+    delete msg.key.senderPn;
+    msg.key.remoteJidAlt = PHONE_JID;
+    const mappings = [];
+    const sock = {
+        signalRepository: {
+            lidMapping: {
+                async storeLIDPNMappings(pairs) {
+                    mappings.push(...pairs);
+                },
+            },
+        },
+        async sendMessage() {
+            return { key: { id: 'rc13-message-id' } };
+        },
+    };
+
+    const result = await sendReplyToInboundChat({
+        sock,
+        msg,
+        text: 'Daftar menu',
+    });
+
+    assert.deepEqual(mappings, [{ lid: LID_JID, pn: PHONE_JID }]);
+    assert.equal(result.mappingStored, true);
+    assert.equal(result.mappingPn, PHONE_JID);
+});
+
 test('sends to the exact LID when senderPn is unavailable', async () => {
     const msg = createMessage();
     delete msg.key.senderPn;

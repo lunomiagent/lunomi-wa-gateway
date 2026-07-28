@@ -183,7 +183,7 @@ async function handleIncomingMessage(msg) {
             const messageId = rememberOutboundMessage(delivery, phoneNumber);
 
             if (delivery.mappingStored) {
-                console.log(`[CS-AI] Mapping LID tersimpan: ${targetSendJid} <-> ${msg.key.senderPn}`);
+                console.log(`[CS-AI] Mapping LID tersimpan: ${targetSendJid} <-> ${delivery.mappingPn}`);
             } else if (delivery.mappingError) {
                 console.error(`[CS-AI] Gagal menyimpan mapping LID ${targetSendJid}: ${delivery.mappingError.message}`);
             } else if (targetSendJid.endsWith('@lid')) {

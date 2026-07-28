@@ -22,19 +22,19 @@ function resolveFallbackJid(key, primaryJid) {
 
 async function storeInboundLidMapping(sock, key) {
     const lid = key?.remoteJid;
-    const pn = normalizePhoneJid(key?.senderPn);
+    const pn = resolveFallbackJid(key, lid);
     const lidMapping = sock?.signalRepository?.lidMapping;
     const storeMappings = lidMapping?.storeLIDPNMappings;
 
     if (!lid?.endsWith('@lid') || !pn || typeof storeMappings !== 'function') {
-        return { mappingStored: false, mappingError: null };
+        return { mappingStored: false, mappingError: null, mappingPn: pn };
     }
 
     try {
         await storeMappings.call(lidMapping, [{ lid, pn }]);
-        return { mappingStored: true, mappingError: null };
+        return { mappingStored: true, mappingError: null, mappingPn: pn };
     } catch (mappingError) {
-        return { mappingStored: false, mappingError };
+        return { mappingStored: false, mappingError, mappingPn: pn };
     }
 }
 

@@ -63,7 +63,8 @@ Add a small CommonJS-compatible runtime loader that:
 
 The package manifest and lockfile will replace
 `@whiskeysockets/baileys` with the exact version `baileys@7.0.0-rc13`.
-The deployment runtime must use Node.js 20 or newer.
+The deployment runtime must use Node.js 22 or newer. Baileys itself requires
+Node.js 20, while the installed Supabase JS release requires Node.js 22.
 
 ### WhatsApp connection
 
@@ -193,7 +194,7 @@ Implementation will follow test-driven development.
 
 ### Runtime acceptance on Render
 
-- The service boots on Node.js 20 or newer without CommonJS/ESM errors.
+- The service boots on Node.js 22 or newer without CommonJS/ESM errors.
 - A new inbound LID message receives a visible WhatsApp reply.
 - Logs show mapping storage and message submission without a send error.
 - Supabase contains relevant v7 auth-state records after pairing and traffic;
@@ -252,7 +253,7 @@ Rollback does not delete sessions or auth data.
 - An inbound LID/PN pair is stored before the reply is sent.
 - The exact inbound LID remains the primary reply target.
 - Logs distinguish socket submission from confirmed visibility/delivery.
-- Render starts successfully on Node.js 20+.
+- Render starts successfully on Node.js 22+.
 - A test message receives a visible reply in WhatsApp.
 - Only intentional project files are committed; diagnostic untracked files
   remain untouched.
