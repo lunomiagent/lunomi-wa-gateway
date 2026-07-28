@@ -40,6 +40,18 @@ const openAgenticModel = process.env.LUNOMI_AGENT_MODEL || 'claude-sonnet-4.5';
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+/**
+ * CS membutuhkan kualitas percakapan sebelum kecepatan. Groq tetap tersedia
+ * sebagai cadangan saat provider utama tidak dapat digunakan.
+ */
+function getProviderOrder({ hasGemini, hasOpenAgentic, hasGroq }) {
+    return [
+        hasGemini && 'gemini',
+        hasOpenAgentic && 'openagentic',
+        hasGroq && 'groq',
+    ].filter(Boolean);
+}
+
 // ─── Inisialisasi Gemini ─────────────────────────────────────────────────────
 let geminiClient = null;
 if (geminiApiKey) {
@@ -713,8 +725,8 @@ async function runWithGemini(systemPrompt, contextMessages, userMessage, session
 // ─── OpenAgentic (OpenAI-compatible) Fallback Engine ─────────────────────────
 async function runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated) {
     const candidateOpenAgenticModels = [
-        'deepseek-v4-flash',
         openAgenticModel || 'claude-sonnet-4.5',
+        'deepseek-v4-flash',
     ];
 
     let lastErr = null;
@@ -930,34 +942,25 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
         inboundMessageId: session.inbound_message_id || null,
     };
 
-    // 1. Coba Groq API (Llama 3.3 70B Versatile - Ultra-Fast & High Quota)
-    if (groqApiKey) {
+    const providerRunners = {
+        gemini: () => runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated),
+        openagentic: () => runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated),
+        groq: () => runWithGroq(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated),
+    };
+
+    for (const providerName of getProviderOrder({
+        hasGemini: Boolean(geminiClient),
+        hasOpenAgentic: Boolean(openAgenticApiKey),
+        hasGroq: Boolean(groqApiKey),
+    })) {
         try {
-            return await runWithGroq(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-        } catch (groqErr) {
-            console.error('[AIEngine] Groq API error, mencoba fallback ke OpenAgentic:', groqErr.message);
+            return await providerRunners[providerName]();
+        } catch (providerErr) {
+            console.error(`[AIEngine] ${providerName} error, mencoba provider berikutnya:`, providerErr.message);
         }
     }
 
-    // 2. Coba OpenAgentic (deepseek-v4-flash / claude-sonnet-4.5)
-    if (openAgenticApiKey) {
-        try {
-            return await runWithOpenAgentic(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-        } catch (openAgenticErr) {
-            console.error('[AIEngine] OpenAgentic error, mencoba fallback ke Gemini:', openAgenticErr.message);
-        }
-    }
-
-    // 3. Fallback ke Gemini (gemini-2.5-flash, gemini-2.5-flash-lite)
-    if (geminiClient) {
-        try {
-            return await runWithGemini(systemPrompt, contextMessages, userMessage, sessionContext, onOrderCreated, onComplaintCreated);
-        } catch (geminiErr) {
-            console.error('[AIEngine] Gemini error:', geminiErr.message);
-        }
-    }
-
-    // 4. Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
+    // Fallback ramah jika seluruh API AI kuotanya habis (mencegah bot mati/error)
     console.log('[AIEngine] Seluruh AI Model kuota habis / tidak merespon. Menggunakan balasan CS fallback.');
     return {
         text: 'Halo Kak! Terima kasih telah menghubungi Cleco Pii 😊 Tim kasir kami sedang memproses data & siap membantu Kakak. Untuk informasi menu F&B favorit atau pesanan toko, silakan infokan di sini ya Kak! 🙏',
@@ -970,4 +973,5 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
 module.exports = {
     processMessage,
     buildSystemPrompt,
+    getProviderOrder,
 };
