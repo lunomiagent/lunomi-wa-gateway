@@ -110,6 +110,10 @@ async function handleIncomingMessage(msg) {
 
     if (!messageText.trim()) return;
 
+    // Ekstrak real phone JID & nomor HP di paling atas (mencegah ReferenceError TDZ)
+    const realJid = msg.key?.remoteJidAlt || msg.key?.participantAlt || msg.key?.remoteJid;
+    const phoneNumber = sessionManager.normalizePhone(realJid || jid);
+
     // Handle pesan dari akun WhatsApp sendiri (fromMe = true)
     if (msg.key?.fromMe) {
         const lower = messageText.trim().toLowerCase();
@@ -125,10 +129,6 @@ async function handleIncomingMessage(msg) {
         // Bersihkan prefix test agar AI menjawab pertanyaan utama dengan natural
         messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
     }
-
-    // Ekstrak real phone JID jika dikirim via WhatsApp LID
-    const realJid = msg.key?.remoteJidAlt || msg.key?.participantAlt || msg.key?.remoteJid;
-    const phoneNumber = sessionManager.normalizePhone(realJid || jid);
     
     // Resolusi target JID balasan: Utamakan 628xxx@s.whatsapp.net / remoteJidAlt agar pesan dipastikan masuk ke HP pembeli
     const resolveTargetJid = () => {
