@@ -683,7 +683,7 @@ git add -- docs/superpowers/plans/2026-07-28-baileys-v7-lid-routing.md
 git commit -m "docs: record Baileys v7 migration execution"
 ```
 
-- [ ] **Step 6: Re-run the minimal post-commit gate**
+- [x] **Step 6: Re-run the minimal post-commit gate**
 
 Run:
 
@@ -696,7 +696,10 @@ git log -1 --oneline
 Expected: tests remain green; only the three known diagnostic files are
 untracked; `main` is ahead of `origin/main`.
 
-- [ ] **Step 7: Push `main`**
+Execution result: 17 tests passed; only the three preserved diagnostic files
+were untracked.
+
+- [x] **Step 7: Push `main`**
 
 Run:
 
@@ -706,7 +709,9 @@ git push origin main
 
 Expected: Git reports `main -> main`.
 
-- [ ] **Step 8: Verify remote receipt**
+Execution result: Git reported `2b1f0dc..cb772dc main -> main`.
+
+- [x] **Step 8: Verify remote receipt**
 
 Run:
 
@@ -717,6 +722,11 @@ git rev-parse origin/main
 ```
 
 Expected: both commit hashes are identical.
+
+Execution result: local `HEAD` and `origin/main` both resolved to
+`cb772dc7d1b45c7456860871ec3bd7708529f2c1`. This checklist-completion update
+is a documentation-only follow-up commit and is pushed with a second remote SHA
+verification.
 
 ## Runtime Handoff After Push
 
