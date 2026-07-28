@@ -344,11 +344,19 @@ async function connectToWhatsApp() {
         }
 
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log('Koneksi terputus karena:', lastDisconnect?.error, ', mencoba reconnect:', shouldReconnect);
+            const statusCode = (lastDisconnect?.error)?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            const isConflict = statusCode === 440 || lastDisconnect?.error?.message?.includes('conflict');
+
+            if (isConflict) {
+                console.log('[WA Gateway] Terdeteksi Session Conflict / Dual Deployment (statusCode 440). Menunggu instance lain termination (5s)...');
+            } else {
+                console.log('Koneksi terputus karena:', lastDisconnect?.error?.message || lastDisconnect?.error, ', mencoba reconnect:', shouldReconnect);
+            }
+
             isConnected = false;
             if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, 3000);
+                setTimeout(connectToWhatsApp, isConflict ? 5000 : 3000);
             } else {
                 console.log('Anda sudah LOGOUT. Membersihkan sesi dari database...');
                 clearSession().then(() => {
