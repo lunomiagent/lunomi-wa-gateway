@@ -1,8 +1,8 @@
 const express = require('express');
-const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, Browsers, WAMessageStatus } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { createClient } = require('@supabase/supabase-js');
+const { loadBaileys } = require('./baileysRuntime');
 const useSupabaseAuthState = require('./useSupabaseAuth');
 const sessionManager = require('./waSessionManager');
 const aiEngine = require('./aiEngine');
@@ -182,6 +182,14 @@ async function handleIncomingMessage(msg) {
             });
             const messageId = rememberOutboundMessage(delivery, phoneNumber);
 
+            if (delivery.mappingStored) {
+                console.log(`[CS-AI] Mapping LID tersimpan: ${targetSendJid} <-> ${msg.key.senderPn}`);
+            } else if (delivery.mappingError) {
+                console.error(`[CS-AI] Gagal menyimpan mapping LID ${targetSendJid}: ${delivery.mappingError.message}`);
+            } else if (targetSendJid.endsWith('@lid')) {
+                console.warn(`[CS-AI] Mapping LID ${targetSendJid} tidak tersedia; pengiriman exact-JID tetap dicoba.`);
+            }
+
             if (delivery.usedFallback) {
                 console.warn(`[CS-AI] Primary ${targetSendJid} gagal; stanza disubmit via fallback ${delivery.targetJid} (messageId: ${messageId || 'unknown'})`);
             }
@@ -191,6 +199,9 @@ async function handleIncomingMessage(msg) {
             const causes = sendError instanceof AggregateError
                 ? sendError.errors.map(error => error?.message || String(error)).join(' | ')
                 : sendError.message;
+            if (sendError.mappingError) {
+                console.error(`[CS-AI] Gagal menyimpan mapping LID ${targetSendJid}: ${sendError.mappingError.message}`);
+            }
             console.error(`[CS-AI] Pengiriman balasan gagal untuk ${phoneNumber}: ${causes}`);
             throw sendError;
         }
@@ -310,11 +321,14 @@ async function handleIncomingMessage(msg) {
         
         // Kirim balasan aman ke WhatsApp pelanggan
         let deliveryError = null;
+        let mappingError = null;
         let delivery = null;
         try {
             delivery = await safeSendReply(replyText);
+            mappingError = delivery.mappingError?.message || null;
         } catch (sendErr) {
             deliveryError = sendErr.message || 'Gagal mengirim ke socket WA';
+            mappingError = sendErr.mappingError?.message || null;
         }
 
         // Update context messages
@@ -338,13 +352,13 @@ async function handleIncomingMessage(msg) {
             aiModel: aiResult.model,
             tokensUsed: aiResult.tokensUsed,
             toolsCalled: aiResult.toolsCalled,
-            errorInfo: deliveryError,
+            errorInfo: deliveryError || mappingError,
         });
 
         if (deliveryError) {
             console.error(`[CS-AI] Balasan GAGAL disubmit ke ${phoneNumber}: ${deliveryError}`);
         } else {
-            console.log(`[CS-AI] Balasan disubmit ke ${delivery.targetJid}; menunggu delivery receipt (messageId: ${delivery.message?.key?.id || 'unknown'}, model: ${aiResult.model}, tools: ${aiResult.toolsCalled?.join(', ') || 'none'})`);
+            console.log(`[CS-AI] Balasan disubmit ke ${delivery.targetJid}; status delivery akan dicatat jika tersedia (messageId: ${delivery.message?.key?.id || 'unknown'}, model: ${aiResult.model}, tools: ${aiResult.toolsCalled?.join(', ') || 'none'})`);
         }
 
     } catch (err) {
@@ -354,7 +368,14 @@ async function handleIncomingMessage(msg) {
 
 // ─── Connect to WhatsApp ──────────────────────────────────────────────────────
 async function connectToWhatsApp() {
-    const { state, saveCreds, clearSession } = await useSupabaseAuthState(supabase);
+    const {
+        default: makeWASocket,
+        DisconnectReason,
+        fetchLatestBaileysVersion,
+        Browsers,
+        WAMessageStatus,
+    } = await loadBaileys();
+    const { state, saveCreds } = await useSupabaseAuthState(supabase);
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`[WA] Memakai versi v${version.join('.')}, isLatest: ${isLatest}`);
 
@@ -363,7 +384,7 @@ async function connectToWhatsApp() {
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: 'silent' }),
-        browser: ["Mac OS", "Chrome", "121.0.0.0"],
+        browser: Browsers.macOS('Desktop'),
         syncFullHistory: false,
         markOnlineOnConnect: true,
         generateHighQualityLinkPreview: false,
@@ -400,13 +421,9 @@ async function connectToWhatsApp() {
 
             isConnected = false;
             if (shouldReconnect) {
-                setTimeout(connectToWhatsApp, isConflict ? 5000 : 3000);
+                setTimeout(startWhatsAppConnection, isConflict ? 5000 : 3000);
             } else {
-                console.log('Anda sudah LOGOUT. Membersihkan sesi dari database...');
-                clearSession().then(() => {
-                    console.log('Sesi dibersihkan. Memulai ulang gateway untuk mendapat QR baru...');
-                    connectToWhatsApp();
-                });
+                console.error('[WA Gateway] Sesi berstatus loggedOut. Data sesi dipertahankan; lakukan reset/relink eksplisit untuk mendapat QR baru.');
             }
         } else if (connection === 'open') {
             isConnected = true;
@@ -471,6 +488,13 @@ async function connectToWhatsApp() {
                 console.log(`[CS-AI] Delivery ${statusName} untuk ${tracked.phoneNumber} via ${tracked.targetJid} (messageId: ${messageId})`);
             }
         }
+    });
+}
+
+function startWhatsAppConnection() {
+    connectToWhatsApp().catch((error) => {
+        isConnected = false;
+        console.error('[WA Gateway] Gagal memulai koneksi WhatsApp:', error);
     });
 }
 
@@ -845,5 +869,5 @@ cron.schedule('0 * * * *', async () => {
 app.listen(PORT, () => {
     console.log(`🚀 WA Gateway API berjalan di http://localhost:${PORT}`);
     console.log(`🤖 CS AI Engine: Gemini 2.5 Flash (Primary) + OpenAgentic Claude (Fallback)`);
-    connectToWhatsApp();
+    startWhatsAppConnection();
 });
