@@ -156,9 +156,9 @@ async function handleIncomingMessage(msg) {
         }
 
         const lower = messageText.trim().toLowerCase();
-        const isSelfTest = lower.startsWith('!test') || lower.startsWith('[test]') || lower.startsWith('test');
+        const isSelfTest = /^(!test|\[test\]|test|tes|cek|ping|p|halo|hi|hello)/i.test(lower);
         if (!isSelfTest) {
-            // Hanya jika manusia membalas manual dari HP kasir -> Pause AI 60m
+            // Hanya jika manusia membalas manual dari HP kasir ke pelanggan lain -> Pause AI 60m
             const session = await sessionManager.getOrCreateSession(phoneNumber);
             await sessionManager.setAiPaused(session.id, 60);
             console.log(`[CS-AI] Kasir membalas manual dari HP. AI otomatis paused (60m) untuk ${phoneNumber}.`);
@@ -166,7 +166,7 @@ async function handleIncomingMessage(msg) {
         }
 
         // Bersihkan prefix test agar AI menjawab pertanyaan utama dengan natural
-        messageText = messageText.replace(/^(!test|\[test\]|test)\s*/i, '').trim() || messageText;
+        messageText = messageText.replace(/^(!test|\[test\]|test|tes|cek|ping)\s*/i, '').trim() || messageText;
     }
 
     // Helper aman pengiriman pesan WhatsApp dengan multi-target dispatch
