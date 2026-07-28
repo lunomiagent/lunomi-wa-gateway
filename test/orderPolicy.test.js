@@ -9,6 +9,7 @@ const {
     resolveEffectiveUserRole,
     createOrderIdempotencyId,
     classifyStaffVerification,
+    scopeToolArgsForSession,
 } = require('../orderPolicy');
 
 const pendingContext = [
@@ -102,6 +103,41 @@ test('staff and owner receive internal tools without customer order creation', (
             'get_attendance_today',
             'get_recipe_hpp',
         ]);
+    }
+});
+
+test('customer-facing tools are always scoped to the Cleco Pii outlet', () => {
+    assert.equal(typeof scopeToolArgsForSession, 'function');
+
+    for (const userRole of ['customer', 'unknown', undefined]) {
+        for (const toolName of ['get_menu_catalog', 'get_outlet_info', 'create_wa_order']) {
+            assert.deepEqual(
+                scopeToolArgsForSession(toolName, { outlet_code: 'BJ' }, { userRole }),
+                { outlet_code: 'CP' },
+                `${userRole || 'missing role'}:${toolName}`
+            );
+        }
+    }
+});
+
+test('staff and owner tools are also pinned to the Cleco Pii outlet', () => {
+    assert.equal(typeof scopeToolArgsForSession, 'function');
+
+    for (const userRole of ['staff', 'owner']) {
+        for (const toolName of [
+            'get_menu_catalog',
+            'get_outlet_info',
+            'get_stock_status',
+            'get_daily_sales',
+            'get_attendance_today',
+            'get_recipe_hpp',
+        ]) {
+            assert.deepEqual(
+                scopeToolArgsForSession(toolName, { outlet_code: 'BJ' }, { userRole }),
+                { outlet_code: 'CP' },
+                `${userRole}:${toolName}`
+            );
+        }
     }
 });
 

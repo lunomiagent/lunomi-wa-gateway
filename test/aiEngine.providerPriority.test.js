@@ -45,6 +45,13 @@ test('customer responses cannot expose or advertise internal business informatio
         'customer'
     );
     assert.doesNotMatch(alternateSpelling, /\bomzet\b/i);
+
+    const crossOutletResponse = sanitizeResponseForRole(
+        'Mau lihat kopi di BJ Baby Joy atau outlet RB?',
+        'customer'
+    );
+    assert.doesNotMatch(crossOutletResponse, /\b(?:BJ|Baby Joy|RB|Resep Bunce)\b/i);
+    assert.match(crossOutletResponse, /Cleco Pii/i);
 });
 
 test('internal staff responses are not altered by the customer safety filter', () => {

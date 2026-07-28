@@ -85,6 +85,7 @@ kode saat ini; nilai aktual harus disimpan di Render atau file `.env` lokal.
 | `GROQ_BASE_URL` | Opsional | Base URL Groq; default adalah endpoint OpenAI-compatible Groq. |
 | `GROQ_MODEL` | Opsional | Model Groq; default `llama-3.3-70b-versatile`. |
 | `WA_DELIVERY_RECEIPT_TIMEOUT_MS` | Opsional | Batas tunggu receipt pengiriman dalam milidetik; default `30000`. |
+| `WA_CUSTOMER_OUTLET_CODE` | Ya di produksi | Scope outlet seluruh tool pada gateway WA; untuk service ini wajib `CP` (Cleco Pii). |
 | `DEFAULT_WA_PHONE` | Opsional | Nomor pemilik/default untuk konteks sesi. |
 | `PORT` | Platform | Port HTTP; default lokal `3001`. Render mengaturnya sesuai service. |
 | `CRON_SECRET` | Ya di produksi | Secret yang **sama** dengan aplikasi Lunomi Web untuk endpoint cron. Jangan menuliskan nilainya di kode atau dokumentasi. |

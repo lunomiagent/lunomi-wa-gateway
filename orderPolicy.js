@@ -3,6 +3,18 @@
 const { createHash } = require('node:crypto');
 
 const ORDER_TOOL_NAME = 'create_wa_order';
+const CUSTOMER_OUTLET_CODE = String(process.env.WA_CUSTOMER_OUTLET_CODE || 'CP')
+    .trim()
+    .toUpperCase();
+const CUSTOMER_OUTLET_SCOPED_TOOL_NAMES = new Set([
+    'get_menu_catalog',
+    'get_outlet_info',
+    'get_stock_status',
+    'get_daily_sales',
+    'get_attendance_today',
+    'get_recipe_hpp',
+    ORDER_TOOL_NAME,
+]);
 const PUBLIC_CS_TOOL_NAMES = new Set([
     'get_menu_catalog',
     'get_outlet_info',
@@ -103,6 +115,16 @@ function isToolAllowedForSession(toolName, sessionContext) {
 function filterToolsForSession(tools, sessionContext, nameSelector = tool => tool?.function?.name) {
     if (!Array.isArray(tools)) return [];
     return tools.filter(tool => isToolAllowedForSession(nameSelector(tool), sessionContext));
+}
+
+function scopeToolArgsForSession(toolName, toolArgs, sessionContext) {
+    const scopedArgs = toolArgs && typeof toolArgs === 'object' && !Array.isArray(toolArgs)
+        ? { ...toolArgs }
+        : {};
+    if (CUSTOMER_OUTLET_SCOPED_TOOL_NAMES.has(toolName)) {
+        scopedArgs.outlet_code = CUSTOMER_OUTLET_CODE;
+    }
+    return scopedArgs;
 }
 
 function canonicalizeOrderPayload({
@@ -236,6 +258,7 @@ module.exports = {
     createOrderIdempotencyId,
     isToolAllowedForSession,
     filterToolsForSession,
+    scopeToolArgsForSession,
     canonicalizeOrderPayload,
     executeAuthorizedOrder,
 };

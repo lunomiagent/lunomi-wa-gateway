@@ -26,6 +26,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const {
     filterToolsForSession,
     isToolAllowedForSession,
+    scopeToolArgsForSession,
     executeAuthorizedOrder,
 } = require('./orderPolicy');
 
@@ -53,7 +54,7 @@ function getProviderOrder({ hasGemini, hasOpenAgentic, hasGroq }) {
     ].filter(Boolean);
 }
 
-const CUSTOMER_SENSITIVE_RESPONSE_PATTERN = /\b(?:lunomi(?:\s+hub)?|om[sz]et|penjualan\s+harian|absensi|absen(?:si)?\s+karyawan|kehadiran\s+karyawan|hpp|harga\s+pokok|harga\s+modal|modal\s+produk|resep|gramasi|bahan\s+baku|overhead|margin|laba|profit)\b/i;
+const CUSTOMER_SENSITIVE_RESPONSE_PATTERN = /\b(?:lunomi(?:\s+hub)?|om[sz]et|penjualan\s+harian|absensi|absen(?:si)?\s+karyawan|kehadiran\s+karyawan|hpp|harga\s+pokok|harga\s+modal|modal\s+produk|resep|gramasi|bahan\s+baku|overhead|margin|laba|profit|baby\s+joy|resep\s+bunce|bj|rb)\b/i;
 const SAFE_CUSTOMER_RESPONSE = 'Halo Kak! Saya bisa bantu seputar menu, harga, lokasi, jam buka, pesanan, atau menghubungkan Kakak dengan kasir Cleco Pii. Ada yang ingin ditanyakan? 😊';
 
 function sanitizeResponseForRole(responseText, userRole) {
@@ -80,16 +81,28 @@ if (geminiApiKey) {
  * Data katalog menu & outlet di-inject agar respon umum bisa cepat tanpa tool call.
  */
 async function buildSystemPrompt(userRole, karyawanNama) {
+    const gatewayOutletCode = scopeToolArgsForSession(
+        'get_menu_catalog',
+        {},
+        { userRole }
+    ).outlet_code;
+
     // Pre-fetch katalog menu F&B terhubung langsung dengan tabel kategori_produk
     let menuContext = '';
     try {
-        const { data: menuItems } = await supabase
+        let menuQuery = supabase
             .from('produk')
             .select('nama, harga_jual, tipe, sub_kategori, kategori:kategori_id(nama)')
             .eq('aktif', true)
             .eq('tipe', 'menu_fnb')
-            .order('nama')
-            .limit(60);
+            .order('nama');
+
+        if (gatewayOutletCode) {
+            const outletId = await resolveOutletIdByCode(gatewayOutletCode);
+            menuQuery = menuQuery.eq('outlet_id', outletId);
+        }
+
+        const { data: menuItems } = await menuQuery.limit(60);
 
         if (menuItems && menuItems.length > 0) {
             const groupedMenu = menuItems.reduce((acc, item) => {
@@ -109,11 +122,15 @@ async function buildSystemPrompt(userRole, karyawanNama) {
     // Pre-fetch info outlet (hanya toko publik, abaikan HO/Pusat)
     let outletContext = '';
     try {
-        const { data: outlets } = await supabase
+        let outletQuery = supabase
             .from('outlet')
-            .select('kode, nama, alamat, kota')
-            .neq('kode', 'HO')
-            .order('kode');
+            .select('kode, nama, alamat, kota');
+
+        outletQuery = gatewayOutletCode
+            ? outletQuery.eq('kode', gatewayOutletCode)
+            : outletQuery.neq('kode', 'HO');
+
+        const { data: outlets } = await outletQuery.order('kode');
 
         if (outlets && outlets.length > 0) {
             outletContext = outlets
@@ -125,8 +142,8 @@ async function buildSystemPrompt(userRole, karyawanNama) {
     }
 
     if (userRole === 'staff' || userRole === 'owner') {
-        return `Kamu adalah Asisten Internal Lunomi Hub untuk staf bernama ${karyawanNama || 'Tim'}.
-Kamu bisa menjawab pertanyaan seputar operasional bisnis secara langsung dan akurat.
+        return `Kamu adalah Asisten Internal Cleco Pii untuk staf bernama ${karyawanNama || 'Tim'}.
+Kamu hanya melayani operasional outlet Cleco Pii (kode CP) secara langsung dan akurat. Jangan menawarkan, menanyakan, atau menggunakan outlet lain.
 
 DAFTAR OUTLET:
 ${outletContext || 'Data outlet tidak tersedia saat ini.'}
@@ -175,7 +192,7 @@ GUIDELINE STRATEGI REKOMENDASI & PAIRING:
 - Panduan Pemesanan: Mengobrol santai ➔ Tanya Dine-in, Takeaway, atau Delivery Beji ➔ Ringkas item dan total ➔ Minta konfirmasi eksplisit ➔ Baru catat via tool 'create_wa_order'.
 
 ATURAN KEAMANAN PEMESANAN:
-- Kumpulkan nama pelanggan, item katalog, jumlah, jenis layanan, dan outlet tujuan. Tampilkan ringkasan lengkap beserta total lalu tanyakan apakah sudah benar.
+- Kumpulkan nama pelanggan, item katalog, jumlah, dan jenis layanan. Outlet selalu Cleco Pii (CP), jadi DILARANG menanyakan outlet tujuan. Tampilkan ringkasan lengkap beserta total lalu tanyakan apakah sudah benar.
 - Minta pelanggan membalas dengan kalimat eksplisit "Ya, saya konfirmasi pesanan ini". Pesan pendek atau ambigu seperti "tes", "ok", "pesan", dan "cek" BUKAN konfirmasi.
 - Gunakan tool 'create_wa_order' hanya setelah balasan konfirmasi eksplisit tersebut. Harga dan total final selalu divalidasi sistem dari katalog.
 
@@ -188,7 +205,7 @@ FORMATTING KETAT WHATSAPP (MINIMALIS & DILARANG BANYAK TANDA BINTANG '*'):
 BATASAN STRICT SYSTEM & KERAHASIAAN CLECO PII:
 - DILARANG KERAS MENGGUNAKAN KATA "database", "backend", "system", "Supabase", "tabel", "server", "API", "tools", "JSON", ATAU ISTILAH TEKNIS IT DALAM PERCAKAPAN DENGAN PELANGGAN! Berbicaralah 100% secara alami seperti manusia (staf CS/kasir toko Cleco Pii). Alih-alih mengatakan "ada di database saya", katakanlah "sudah lengkap ada di menu kami" atau "siap saya bantu catat, Kak!".
 - DILARANG menyebutkan kata "Lunomi" ke pelanggan. Gunakan nama brand "Cleco Pii" atau "Cleco Group".
-- DILARANG mencantumkan kantor pusat (HO) atau outlet toko lain kecuali jika pelanggan bertanya spesifik tentang cabang lain.
+- NOMOR WHATSAPP INI KHUSUS CLECO PII (KODE OUTLET CP). DILARANG menawarkan, menanyakan pilihan, atau menyebut outlet lain dalam kondisi apa pun.
 - DILARANG menawarkan barang retail popok/susu (fokus 100% pada makanan & minuman F&B Cleco Pii).
 - DILARANG menyebutkan GoFood atau ShopeeFood (Cleco Pii hanya ada di GrabFood).
 - DILARANG melemparkan pelanggan ke nomor WA lain (semua dilakukan di 1 nomor WhatsApp Cleco Pii ini).
@@ -199,6 +216,21 @@ BATASAN STRICT SYSTEM & KERAHASIAAN CLECO PII:
 
 // ─── Tool Implementations (Live Supabase Queries) ────────────────────────────
 
+async function resolveOutletIdByCode(outletCode) {
+    const normalizedCode = String(outletCode || '').trim().toUpperCase();
+    if (!normalizedCode) throw new Error('Kode outlet wajib tersedia.');
+
+    const { data, error } = await supabase
+        .from('outlet')
+        .select('outlet_id')
+        .eq('kode', normalizedCode)
+        .single();
+    if (error || !data?.outlet_id) {
+        throw new Error(`Outlet "${normalizedCode}" tidak ditemukan.`);
+    }
+    return data.outlet_id;
+}
+
 async function toolGetMenuCatalog({ outlet_code, category }) {
     let query = supabase
         .from('produk')
@@ -206,6 +238,11 @@ async function toolGetMenuCatalog({ outlet_code, category }) {
         .eq('aktif', true)
         .eq('tipe', 'menu_fnb')
         .order('nama');
+
+    if (outlet_code) {
+        const outletId = await resolveOutletIdByCode(outlet_code);
+        query = query.eq('outlet_id', outletId);
+    }
 
     const { data, error } = await query.limit(60);
     if (error) throw new Error('Gagal mengambil data menu: ' + error.message);
@@ -319,7 +356,7 @@ async function toolGetDailySales({ outlet_code, date }) {
     if (error) throw new Error('Gagal mengambil data transaksi: ' + error.message);
 
     if (!data || data.length === 0) {
-        return `Belum ada transaksi selesai untuk ${outlet_code || 'semua outlet'} pada tanggal ${targetDate}.`;
+        return `Belum ada transaksi selesai untuk Cleco Pii (CP) pada tanggal ${targetDate}.`;
     }
 
     const totalOmset = data.reduce((sum, t) => sum + parseFloat(t.total || 0), 0);
@@ -367,7 +404,7 @@ async function toolGetAttendanceToday({ outlet_code, date }) {
     if (error) throw new Error('Gagal mengambil data absensi: ' + error.message);
 
     if (!data || data.length === 0) {
-        return `Belum ada data absensi untuk ${outlet_code || 'semua outlet'} pada tanggal ${targetDate}.`;
+        return `Belum ada data absensi Cleco Pii (CP) pada tanggal ${targetDate}.`;
     }
 
     return JSON.stringify(data.map(a => ({
@@ -379,15 +416,21 @@ async function toolGetAttendanceToday({ outlet_code, date }) {
     })));
 }
 
-async function toolGetRecipeHpp({ product_name }) {
+async function toolGetRecipeHpp({ product_name, outlet_code }) {
     if (!product_name) throw new Error('Nama produk harus diisi.');
 
-    const { data: produk, error: produkErr } = await supabase
+    let produkQuery = supabase
         .from('produk')
         .select('produk_id, nama, harga_jual, overhead_kemasan, overhead_listrik, overhead_tenaga_kerja, overhead_lainnya')
         .ilike('nama', `%${product_name}%`)
-        .eq('aktif', true)
-        .single();
+        .eq('aktif', true);
+
+    if (outlet_code) {
+        const outletId = await resolveOutletIdByCode(outlet_code);
+        produkQuery = produkQuery.eq('outlet_id', outletId);
+    }
+
+    const { data: produk, error: produkErr } = await produkQuery.single();
 
     if (produkErr || !produk) {
         return `Produk "${product_name}" tidak ditemukan di database.`;
@@ -453,7 +496,7 @@ const GEMINI_TOOLS = [
                 parameters: {
                     type: 'OBJECT',
                     properties: {
-                        outlet_code: { type: 'STRING', description: 'Kode outlet (misal: CP, BJ, RB). Opsional.' },
+                        outlet_code: { type: 'STRING', description: 'Untuk customer otomatis dikunci ke outlet Cleco Pii (CP).' },
                         category: { type: 'STRING', description: 'Filter berdasarkan kategori/tipe produk. Opsional.' },
                     },
                 },
@@ -464,50 +507,51 @@ const GEMINI_TOOLS = [
                 parameters: {
                     type: 'OBJECT',
                     properties: {
-                        outlet_code: { type: 'STRING', description: 'Kode outlet spesifik. Opsional, jika kosong mengembalikan semua outlet.' },
+                        outlet_code: { type: 'STRING', description: 'Untuk customer otomatis dikunci ke outlet Cleco Pii (CP).' },
                     },
                 },
             },
             {
                 name: 'get_stock_status',
-                description: 'Mengecek status stok bahan baku yang tipis atau hampir habis di outlet. Untuk staf internal atau sebelum konfirmasi pesanan.',
+                description: 'Mengecek status stok bahan baku yang tipis atau hampir habis khusus outlet Cleco Pii (CP).',
                 parameters: {
                     type: 'OBJECT',
                     properties: {
-                        outlet_code: { type: 'STRING', description: 'Kode outlet (CP, BJ, RB, dll). Opsional.' },
+                        outlet_code: { type: 'STRING', description: 'Otomatis dikunci ke Cleco Pii (CP).' },
                     },
                 },
             },
             {
                 name: 'get_daily_sales',
-                description: 'Mengambil ringkasan omset dan jumlah transaksi harian per outlet. Khusus untuk staf/owner internal.',
+                description: 'Mengambil ringkasan omset dan jumlah transaksi harian khusus Cleco Pii (CP). Khusus staf/owner.',
                 parameters: {
                     type: 'OBJECT',
                     properties: {
-                        outlet_code: { type: 'STRING', description: 'Kode outlet. Opsional.' },
+                        outlet_code: { type: 'STRING', description: 'Otomatis dikunci ke Cleco Pii (CP).' },
                         date: { type: 'STRING', description: 'Tanggal format YYYY-MM-DD. Opsional, default hari ini.' },
                     },
                 },
             },
             {
                 name: 'get_attendance_today',
-                description: 'Mengambil data absensi karyawan hari ini per outlet. Khusus untuk staf/owner internal.',
+                description: 'Mengambil data absensi karyawan Cleco Pii (CP) hari ini. Khusus staf/owner.',
                 parameters: {
                     type: 'OBJECT',
                     properties: {
-                        outlet_code: { type: 'STRING', description: 'Kode outlet. Opsional.' },
+                        outlet_code: { type: 'STRING', description: 'Otomatis dikunci ke Cleco Pii (CP).' },
                         date: { type: 'STRING', description: 'Tanggal format YYYY-MM-DD. Opsional, default hari ini.' },
                     },
                 },
             },
             {
                 name: 'get_recipe_hpp',
-                description: 'Mengambil resep detail dan kalkulasi HPP (Harga Pokok Produksi) untuk suatu produk. Khusus untuk staf/owner internal.',
+                description: 'Mengambil resep detail dan kalkulasi HPP produk Cleco Pii (CP). Khusus staf/owner.',
                 parameters: {
                     type: 'OBJECT',
                     required: ['product_name'],
                     properties: {
                         product_name: { type: 'STRING', description: 'Nama produk yang ingin dicari resepnya.' },
+                        outlet_code: { type: 'STRING', description: 'Otomatis dikunci ke Cleco Pii (CP).' },
                     },
                 },
             },
@@ -520,7 +564,7 @@ const GEMINI_TOOLS = [
                     properties: {
                         customer_name: { type: 'STRING', description: 'Nama pelanggan.' },
                         phone_number: { type: 'STRING', description: 'Nomor HP pelanggan.' },
-                        outlet_code: { type: 'STRING', description: 'Kode outlet tujuan pesanan.' },
+                        outlet_code: { type: 'STRING', description: 'Otomatis dikunci ke Cleco Pii (CP); jangan tanyakan outlet kepada customer.' },
                         order_items: {
                             type: 'ARRAY',
                             description: 'Daftar item pesanan.',
@@ -559,11 +603,11 @@ const GEMINI_TOOLS = [
 const OPENAI_TOOLS = [
     { type: 'function', function: { name: 'get_menu_catalog', description: 'Mengambil daftar menu Cleco Pii yang aktif.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, category: { type: 'string' } } } } },
     { type: 'function', function: { name: 'get_outlet_info', description: 'Mengambil informasi publik outlet Cleco Pii (alamat, kota, kode).', parameters: { type: 'object', properties: { outlet_code: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'get_stock_status', description: 'Mengecek status stok bahan baku yang tipis di outlet.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'get_daily_sales', description: 'Mengambil ringkasan omset dan jumlah transaksi harian per outlet.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, date: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'get_attendance_today', description: 'Mengambil data absensi karyawan hari ini per outlet.', parameters: { type: 'object', properties: { outlet_code: { type: 'string' }, date: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'get_recipe_hpp', description: 'Mengambil resep detail dan kalkulasi HPP untuk suatu produk.', parameters: { type: 'object', required: ['product_name'], properties: { product_name: { type: 'string' } } } } },
-    { type: 'function', function: { name: 'create_wa_order', description: 'Menyimpan draft pesanan pelanggan ke database.', parameters: { type: 'object', required: ['customer_name', 'phone_number', 'order_items'], properties: { customer_name: { type: 'string' }, phone_number: { type: 'string' }, outlet_code: { type: 'string' }, order_items: { type: 'array', items: { type: 'object' } }, total_estimated: { type: 'number' }, notes: { type: 'string' } } } } },
+    { type: 'function', function: { name: 'get_stock_status', description: 'Mengecek stok bahan baku khusus Cleco Pii (CP).', parameters: { type: 'object', properties: { outlet_code: { type: 'string', description: 'Otomatis CP.' } } } } },
+    { type: 'function', function: { name: 'get_daily_sales', description: 'Mengambil ringkasan omset harian khusus Cleco Pii (CP).', parameters: { type: 'object', properties: { outlet_code: { type: 'string', description: 'Otomatis CP.' }, date: { type: 'string' } } } } },
+    { type: 'function', function: { name: 'get_attendance_today', description: 'Mengambil absensi karyawan khusus Cleco Pii (CP).', parameters: { type: 'object', properties: { outlet_code: { type: 'string', description: 'Otomatis CP.' }, date: { type: 'string' } } } } },
+    { type: 'function', function: { name: 'get_recipe_hpp', description: 'Mengambil resep dan HPP produk khusus Cleco Pii (CP).', parameters: { type: 'object', required: ['product_name'], properties: { product_name: { type: 'string' }, outlet_code: { type: 'string', description: 'Otomatis CP.' } } } } },
+    { type: 'function', function: { name: 'create_wa_order', description: 'Menyimpan draft pesanan customer Cleco Pii.', parameters: { type: 'object', required: ['customer_name', 'phone_number', 'order_items'], properties: { customer_name: { type: 'string' }, phone_number: { type: 'string' }, outlet_code: { type: 'string', description: 'Otomatis Cleco Pii (CP); jangan tanyakan pilihan outlet.' }, order_items: { type: 'array', items: { type: 'object' } }, total_estimated: { type: 'number' }, notes: { type: 'string' } } } } },
     { type: 'function', function: { name: 'create_complaint', description: 'Membuat tiket komplain dan mematikan AI auto-reply sementara.', parameters: { type: 'object', required: ['phone_number', 'complaint_text'], properties: { phone_number: { type: 'string' }, complaint_text: { type: 'string' } } } } },
 ];
 
@@ -575,28 +619,38 @@ const OPENAI_TOOLS = [
  * @param {object} sessionContext - trusted session and current-message context
  * @returns {string} hasil tool sebagai string untuk dikirim kembali ke AI
  */
-async function loadActiveOrderProducts() {
-    const { data, error } = await supabase
+async function loadActiveOrderProducts(outletCode) {
+    let query = supabase
         .from('produk')
         .select('produk_id, nama, harga_jual')
         .eq('aktif', true)
         .eq('tipe', 'menu_fnb');
+
+    if (outletCode) {
+        const outletId = await resolveOutletIdByCode(outletCode);
+        query = query.eq('outlet_id', outletId);
+    }
+
+    const { data, error } = await query;
     if (error) throw new Error(`Gagal memvalidasi katalog pesanan: ${error.message}`);
     return data || [];
 }
 
-async function loadValidOrderOutletCodes() {
-    const { data, error } = await supabase
+async function loadValidOrderOutletCodes(outletCode) {
+    let query = supabase
         .from('outlet')
-        .select('kode')
-        .neq('kode', 'HO');
+        .select('kode');
+
+    query = outletCode
+        ? query.eq('kode', outletCode)
+        : query.neq('kode', 'HO');
+
+    const { data, error } = await query;
     if (error) throw new Error(`Gagal memvalidasi outlet pesanan: ${error.message}`);
     return (data || []).map(outlet => outlet.kode).filter(Boolean);
 }
 
 async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, onComplaintCreated) {
-    console.log(`[AIEngine] Tool call: ${toolName}`, toolArgs);
-
     if (!isToolAllowedForSession(toolName, sessionContext)) {
         console.warn(`[AIEngine] Tool ${toolName} ditolak untuk role ${sessionContext?.userRole || 'unknown'}.`);
         return JSON.stringify({
@@ -605,33 +659,36 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
         });
     }
 
+    const scopedToolArgs = scopeToolArgsForSession(toolName, toolArgs, sessionContext);
+    console.log(`[AIEngine] Tool call: ${toolName}`, scopedToolArgs);
+
     switch (toolName) {
         case 'get_menu_catalog':
-            return await toolGetMenuCatalog(toolArgs);
+            return await toolGetMenuCatalog(scopedToolArgs);
 
         case 'get_outlet_info':
-            return await toolGetOutletInfo(toolArgs);
+            return await toolGetOutletInfo(scopedToolArgs);
 
         case 'get_stock_status':
-            return await toolGetStockStatus(toolArgs);
+            return await toolGetStockStatus(scopedToolArgs);
 
         case 'get_daily_sales':
-            return await toolGetDailySales(toolArgs);
+            return await toolGetDailySales(scopedToolArgs);
 
         case 'get_attendance_today':
-            return await toolGetAttendanceToday(toolArgs);
+            return await toolGetAttendanceToday(scopedToolArgs);
 
         case 'get_recipe_hpp':
-            return await toolGetRecipeHpp(toolArgs);
+            return await toolGetRecipeHpp(scopedToolArgs);
 
         case 'create_wa_order': {
             const { saveWaOrder } = require('./waSessionManager');
             try {
                 const orderData = await executeAuthorizedOrder({
-                    toolArgs,
+                    toolArgs: scopedToolArgs,
                     sessionContext,
-                    loadCatalogProducts: loadActiveOrderProducts,
-                    loadValidOutletCodes: loadValidOrderOutletCodes,
+                    loadCatalogProducts: () => loadActiveOrderProducts(scopedToolArgs.outlet_code),
+                    loadValidOutletCodes: () => loadValidOrderOutletCodes(scopedToolArgs.outlet_code),
                     saveOrder: saveWaOrder,
                     onOrderCreated,
                 });
@@ -649,8 +706,8 @@ async function executeTool(toolName, toolArgs, sessionContext, onOrderCreated, o
             const { createComplaintTicket } = require('./waSessionManager');
             const ticket = await createComplaintTicket({
                 sessionId: sessionContext.sessionId,
-                phoneNumber: toolArgs.phone_number || sessionContext.phoneNumber,
-                complaintText: toolArgs.complaint_text,
+                phoneNumber: scopedToolArgs.phone_number || sessionContext.phoneNumber,
+                complaintText: scopedToolArgs.complaint_text,
             });
             if (onComplaintCreated) onComplaintCreated(ticket);
             return JSON.stringify({ success: true, ticket_id: ticket.id, message: 'Tiket komplain dibuat. AI auto-reply dimatikan sementara. Tim kami akan segera menghubungi.' });

@@ -9,6 +9,8 @@ services:
     envVars:
       - key: PORT
         value: 3001
+      - key: WA_CUSTOMER_OUTLET_CODE
+        value: CP
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
