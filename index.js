@@ -110,18 +110,13 @@ async function handleIncomingMessage(msg) {
 
     if (!messageText.trim()) return;
 
-    // Resolusi target JID sejati (mengatasi bug multi-device @lid)
-    const resolveTargetJid = () => {
-        if (msg.key?.senderPn) {
-            return msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
-        }
-        return jid; 
-    };
-    const targetSendJid = resolveTargetJid();
+    // targetSendJid harus PERSIS sama dengan jid tempat pesan itu berasal (@lid atau @s.whatsapp.net)
+    const targetSendJid = jid;
     const isFromLid = jid.includes('@lid');
 
-    // Ekstrak real phone JID & nomor HP untuk session (Gunakan targetSendJid agar tidak terpecah sessionnya)
-    const phoneNumber = sessionManager.normalizePhone(targetSendJid);
+    // Nomor HP pelanggan untuk sesi DB & audit log (utamakan senderPn real phone)
+    const rawPhoneJid = msg.key?.senderPn || msg.key?.remoteJidAlt || msg.key?.participantAlt || jid;
+    const phoneNumber = sessionManager.normalizePhone(rawPhoneJid);
 
     // Handle pesan dari akun WhatsApp sendiri (fromMe = true)
     if (msg.key?.fromMe) {
@@ -143,25 +138,29 @@ async function handleIncomingMessage(msg) {
     const safeSendReply = async (textToSend) => {
         try {
             console.log(`[CS-AI] Mengirim balasan ke ${targetSendJid} (isFromLid: ${isFromLid})`);
-            // JANGAN gunakan quoted jika asalnya dari @lid atau dikirim ke JID yang berbeda dari JID asal
-            // Ini untuk mencegah pesan di-drop (ghosting) oleh enkripsi Signal WhatsApp.
-            const options = (isFromLid || targetSendJid !== jid) ? {} : { quoted: msg };
+            // Untuk @lid, SELALU kirim tanpa quoted context untuk mencegah WhatsApp client drop/ghosting
+            const options = isFromLid ? {} : { quoted: msg };
             return await sock.sendMessage(targetSendJid, { text: textToSend }, options);
         } catch (primaryErr) {
-            console.error(`[CS-AI] Primary sendMessage gagal ke ${targetSendJid}:`, primaryErr.message);
-            if (jid && jid !== targetSendJid) {
-                try {
-                    return await sock.sendMessage(jid, { text: textToSend });
-                } catch (fallbackErr) {
-                    console.error(`[CS-AI] Fallback sendMessage ke ${jid} juga gagal:`, fallbackErr.message);
-                    throw fallbackErr;
+            console.error(`[CS-AI] Primary sendMessage ke ${targetSendJid} gagal:`, primaryErr.message);
+            // Fallback: Jika @lid gagal, coba kirim ke real phone JID (senderPn)
+            if (msg.key?.senderPn) {
+                const fallbackJid = msg.key.senderPn.includes('@') ? msg.key.senderPn : `${msg.key.senderPn}@s.whatsapp.net`;
+                if (fallbackJid !== targetSendJid) {
+                    try {
+                        console.log(`[CS-AI] Mencoba fallback sendMessage ke ${fallbackJid}`);
+                        return await sock.sendMessage(fallbackJid, { text: textToSend });
+                    } catch (fallbackErr) {
+                        console.error(`[CS-AI] Fallback sendMessage ke ${fallbackJid} juga gagal:`, fallbackErr.message);
+                        throw fallbackErr;
+                    }
                 }
             }
             throw primaryErr;
         }
     };
 
-    console.log(`[CS-AI] Pesan masuk RAW JID: ${jid}, Target: ${targetSendJid}`);
+    console.log(`[CS-AI] Pesan masuk RAW JID: ${jid}, Target: ${targetSendJid}, Phone: ${phoneNumber}`);
     console.log(`[CS-AI] Pesan masuk dari ${phoneNumber} (Target JID: ${targetSendJid}): "${messageText.substring(0, 80)}..."`);
 
     try {
