@@ -12,6 +12,10 @@ const {
     describeReachoutTimeLock,
 } = require('./deliveryTracker');
 const { resolveEffectiveUserRole } = require('./orderPolicy');
+const {
+    detectBusinessCommitmentRisk,
+    formatBusinessCommitmentNotification,
+} = require('./notificationPolicy');
 
 const cors = require('cors');
 
@@ -34,6 +38,7 @@ let sock = null;
 let isConnected = false;
 let currentQR = null;
 let reachoutRestriction = null;
+let downloadMediaMessage = null;
 
 // ─── Helper: Format Nomor WA ─────────────────────────────────────────────────
 function formatWaNumber(target) {
@@ -51,7 +56,17 @@ async function sendGroupNotification(text) {
         return;
     }
     try {
-        const groupJid = await sessionManager.getNotificationGroupJid();
+        let groupJid = await sessionManager.getNotificationGroupJid();
+        if (!groupJid) {
+            const inviteCode = await sessionManager.getGroupInviteCode();
+            if (inviteCode) {
+                const joinedJid = await sock.groupAcceptInvite(inviteCode);
+                if (joinedJid) {
+                    groupJid = await sessionManager.setNotificationGroupJid(joinedJid);
+                    console.log('[Notif] Grup notifikasi otomatis di-join saat alert:', groupJid);
+                }
+            }
+        }
         if (!groupJid) {
             console.warn('[Notif] notification_group JID belum diatur di wa_settings.');
             return;
@@ -133,6 +148,28 @@ function rememberOutboundMessage(delivery, phoneNumber) {
     return messageId;
 }
 
+async function forwardInboundImageToGroup({ message, phoneNumber, caption }) {
+    if (!downloadMediaMessage) {
+        throw new Error('Baileys media downloader belum siap.');
+    }
+
+    const groupJid = await sessionManager.getNotificationGroupJid();
+    if (!groupJid) {
+        throw new Error('notification_group JID belum diatur di wa_settings.');
+    }
+
+    const imageBuffer = await downloadMediaMessage(message, 'buffer', {});
+    await sock.sendMessage(groupJid, {
+        image: imageBuffer,
+        caption: [
+            '🖼️ *GAMBAR DARI PELANGGAN*',
+            `📱 Nomor: ${phoneNumber || 'Tidak diketahui'}`,
+            caption ? `💬 Caption: ${caption}` : '💬 Caption: (tidak ada)',
+            '👉 Mohon tim Cleco Pii meninjau dan membalas manual.',
+        ].join('\n'),
+    });
+}
+
 // ─── AI Message Handler (Private Chat Only) ───────────────────────────────────
 async function handleIncomingMessage(msg) {
     const jid = msg.key?.remoteJid;
@@ -140,11 +177,18 @@ async function handleIncomingMessage(msg) {
     // Filter: hanya private chat
     if (!jid || jid.endsWith('@g.us') || jid.endsWith('@broadcast')) return;
 
-    // Ekstrak teks pesan
+    const inboundImage = msg.message?.imageMessage || null;
+
+    // Ekstrak teks pesan. Gambar tanpa caption tetap diproses sebagai handover,
+    // bukan dibuang diam-diam karena model CS saat ini menerima teks saja.
     let messageText = msg.message?.conversation
         || msg.message?.extendedTextMessage?.text
         || msg.message?.imageMessage?.caption
         || '';
+
+    if (!messageText.trim() && inboundImage) {
+        messageText = '[Pelanggan mengirim gambar]';
+    }
 
     if (!messageText.trim()) return;
 
@@ -253,6 +297,38 @@ async function handleIncomingMessage(msg) {
             staffVerification,
         });
         const isOwnerOrStaff = effectiveUserRole === 'owner' || effectiveUserRole === 'staff';
+
+        if (inboundImage && !isOwnerOrStaff) {
+            const pauseMinutes = await sessionManager.getPauseDurationMinutes();
+            await sessionManager.setAiPaused(session.id, pauseMinutes);
+
+            try {
+                await forwardInboundImageToGroup({
+                    message: msg,
+                    phoneNumber,
+                    caption: inboundImage.caption,
+                });
+            } catch (imageError) {
+                console.error('[Notif] Gagal meneruskan gambar pelanggan ke group:', imageError.message);
+                await sendGroupNotification([
+                    '🖼️ *GAMBAR PELANGGAN TIDAK TERKIRIM*',
+                    `📱 Nomor: ${phoneNumber}`,
+                    `⚠️ ${imageError.message}`,
+                    '👉 Mohon tim buka chat pelanggan secara manual.',
+                ].join('\n'));
+            }
+
+            const imageReply = 'Terima kasih Kak, gambarnya sudah saya teruskan ke tim Cleco Pii. Tim kami akan meninjau dan membalas langsung ya 🙏';
+            try { await safeSendReply(imageReply); } catch (sendError) {
+                console.error('[CS-AI] Gagal mengirim konfirmasi gambar:', sendError.message);
+            }
+            await sendGroupNotification([
+                '🖼️ *HANDOVER GAMBAR PELANGGAN*',
+                `📱 *Pelanggan*: ${phoneNumber}`,
+                `⏸️ *Status*: AI dipause ${pauseMinutes} menit. Mohon tim meninjau gambar dan membalas manual.`,
+            ].join('\n'));
+            return;
+        }
 
         // Deteksi secara natural jika pelanggan biasa ingin bicara dengan kasir / manusia
         const lowerMsg = messageText.trim().toLowerCase();
@@ -388,6 +464,22 @@ async function handleIncomingMessage(msg) {
             errorInfo: deliveryError || mappingError,
         });
 
+        if (!isOwnerOrStaff && !deliveryError) {
+            const risk = detectBusinessCommitmentRisk({
+                inboundText: messageText,
+                replyText,
+            });
+            if (risk) {
+                const pauseMinutes = await sessionManager.getPauseDurationMinutes();
+                await sessionManager.setAiPaused(session.id, pauseMinutes);
+                await sendGroupNotification(formatBusinessCommitmentNotification({
+                    phoneNumber,
+                    risk,
+                    pauseMinutes,
+                }));
+            }
+        }
+
         if (deliveryError) {
             console.error(`[CS-AI] Balasan GAGAL disubmit ke ${phoneNumber}: ${deliveryError}`);
         } else {
@@ -407,7 +499,9 @@ async function connectToWhatsApp() {
         fetchLatestBaileysVersion,
         Browsers,
         WAMessageStatus,
+        downloadMediaMessage: baileysDownloadMediaMessage,
     } = await loadBaileys();
+    downloadMediaMessage = baileysDownloadMediaMessage;
     const { state, saveCreds } = await useSupabaseAuthState(supabase);
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`[WA] Memakai versi v${version.join('.')}, isLatest: ${isLatest}`);
@@ -484,12 +578,7 @@ async function connectToWhatsApp() {
 
                     // Simpan JID hasil join ke wa_settings.notification_group secara otomatis
                     if (jid) {
-                        await supabase
-                            .from('wa_settings')
-                            .upsert(
-                                { key: 'notification_group', value: { jid, name: 'WA Notif Outlet (auto-joined)' }, updated_at: new Date().toISOString() },
-                                { onConflict: 'key' }
-                            );
+                        await sessionManager.setNotificationGroupJid(jid, 'WA Notif Outlet (auto-joined)');
                         console.log('[WA Gateway] Notification group JID otomatis tersimpan:', jid);
                     }
                 } else {
@@ -801,14 +890,7 @@ app.post('/api/wa/join-group', async (req, res) => {
         }
 
         // Simpan JID ke wa_settings.notification_group
-        const { error: upsertErr } = await supabase
-            .from('wa_settings')
-            .upsert(
-                { key: 'notification_group', value: { jid, name: 'WA Notif Outlet' }, updated_at: new Date().toISOString() },
-                { onConflict: 'key' }
-            );
-
-        if (upsertErr) throw upsertErr;
+        await sessionManager.setNotificationGroupJid(jid);
 
         console.log(`[WA Gateway] Manual join group sukses. JID: ${jid}`);
         return res.json({

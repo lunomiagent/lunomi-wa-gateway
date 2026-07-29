@@ -67,6 +67,19 @@ Endpoint operasional:
 | `POST /broadcast` | Mengirim broadcast (gunakan hanya dengan otorisasi bisnis). |
 | `POST /api/wa/pause` / `resume` | Menjeda atau mengaktifkan CS AI. |
 | `GET` / `POST /api/wa/settings` | Membaca atau memperbarui pengaturan WA. |
+| `POST /api/wa/join-group` | Bergabung ke grup notifikasi dari invite code yang tersimpan. |
+
+### Notifikasi grup dan human takeover
+
+Simpan invite code grup pada `wa_settings` dengan key `group_invite_code`, lalu
+panggil `POST /api/wa/join-group` setelah akun WhatsApp terhubung. JID hasil join
+disimpan otomatis sebagai `notification_group`. Gateway mengirim alert ke grup
+untuk pesanan, komplain, permintaan kasir, pesan gambar pelanggan, dan balasan
+AI yang membuat komitmen jadwal/kerja sama yang perlu diverifikasi manusia.
+
+Key `ai_pause_duration_minutes` mengatur durasi takeover (default 60 menit).
+Pesan gambar pelanggan diteruskan ke grup sebagai media dan AI dijeda agar tim
+Cleco Pii dapat meninjau gambar secara manual.
 
 ## Konfigurasi environment
 

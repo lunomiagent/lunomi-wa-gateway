@@ -385,6 +385,24 @@ async function getNotificationGroupJid() {
 }
 
 /**
+ * Simpan JID grup notifikasi setelah auto-join atau join manual.
+ */
+async function setNotificationGroupJid(jid, name = 'WA Notif Outlet') {
+    if (!jid || !String(jid).endsWith('@g.us')) {
+        throw new Error('JID grup notifikasi tidak valid.');
+    }
+
+    const { error } = await supabase
+        .from('wa_settings')
+        .upsert(
+            { key: 'notification_group', value: { jid, name }, updated_at: new Date().toISOString() },
+            { onConflict: 'key' }
+        );
+    if (error) throw error;
+    return jid;
+}
+
+/**
  * Ambil invite code WhatsApp Group dari wa_settings.
  * Digunakan saat gateway pertama connect untuk auto-join group notifikasi.
  * @returns {string|null}
@@ -438,6 +456,7 @@ module.exports = {
     markOrderNotified,
     createComplaintTicket,
     getNotificationGroupJid,
+    setNotificationGroupJid,
     getGroupInviteCode,
     isAiGloballyEnabled,
 };
