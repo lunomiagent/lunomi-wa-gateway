@@ -30,10 +30,11 @@ const MAX_CONTEXT_CHARS = 1600;
 function normalizePhone(jid) {
     if (!jid) return '';
     const raw = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '').trim();
-    if (raw.startsWith('62') && raw.length >= 10) {
-        return '0' + raw.substring(2);
+    const clean = raw.split(':')[0].trim();
+    if (clean.startsWith('62') && clean.length >= 10) {
+        return '0' + clean.substring(2);
     }
-    return raw;
+    return clean;
 }
 
 /**

@@ -253,9 +253,12 @@ async function handleIncomingMessage(msg) {
     const targetSendJid = jid;
 
     // Nomor HP pelanggan untuk sesi DB & audit log (utamakan senderPn real phone)
-    const phoneIdentityJid = msg.key?.senderPn
+    const phoneIdentityJid = msg.senderPn
+        || msg.key?.senderPn
         || msg.key?.remoteJidAlt
         || msg.key?.participantAlt
+        || msg.key?.participant
+        || msg.participant
         || (jid.endsWith('@s.whatsapp.net') ? jid : null);
     const rawPhoneJid = phoneIdentityJid || jid;
     const phoneNumber = sessionManager.normalizePhone(rawPhoneJid);
