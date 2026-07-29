@@ -20,7 +20,8 @@ if (!supabaseUrl || !supabaseKey) {
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // Context memory: simpan maksimal N pesan terakhir per sesi
-const MAX_CONTEXT_MESSAGES = 10;
+const MAX_CONTEXT_MESSAGES = 8;
+const MAX_CONTEXT_CHARS = 1600;
 
 /**
  * Normalisasi nomor HP dari format JID Baileys ke format 62xxx
@@ -239,7 +240,20 @@ async function getPauseDurationMinutes() {
 async function updateContextMessages(sessionId, currentMessages, newMessage) {
     if (!sessionId) return;
 
-    const updatedMessages = [...(currentMessages || []), newMessage].slice(-MAX_CONTEXT_MESSAGES);
+    const compactMessage = (message) => {
+        if (!message || typeof message !== 'object') return null;
+        if (typeof message.content !== 'string') return message;
+        return {
+            ...message,
+            content: message.content.length > MAX_CONTEXT_CHARS
+                ? `${message.content.slice(0, MAX_CONTEXT_CHARS)}…`
+                : message.content,
+        };
+    };
+    const updatedMessages = [...(currentMessages || []), newMessage]
+        .map(compactMessage)
+        .filter(Boolean)
+        .slice(-MAX_CONTEXT_MESSAGES);
     
     const { error } = await supabase
         .from('wa_chat_sessions')

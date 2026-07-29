@@ -78,7 +78,7 @@ if (geminiApiKey) {
 // ─── System Prompt Builder ───────────────────────────────────────────────────
 /**
  * Buat System Prompt dinamis berdasarkan role pengguna.
- * Data katalog menu & outlet di-inject agar respon umum bisa cepat tanpa tool call.
+ * Data operasional yang stabil dimuat seperlunya; katalog live selalu melalui tool.
  */
 async function buildSystemPrompt(userRole, karyawanNama) {
     const gatewayOutletCode = scopeToolArgsForSession(
@@ -87,37 +87,9 @@ async function buildSystemPrompt(userRole, karyawanNama) {
         { userRole }
     ).outlet_code;
 
-    // Pre-fetch katalog menu F&B terhubung langsung dengan tabel kategori_produk
-    let menuContext = '';
-    try {
-        let menuQuery = supabase
-            .from('produk')
-            .select('nama, harga_jual, tipe, sub_kategori, kategori:kategori_id(nama)')
-            .eq('aktif', true)
-            .eq('tipe', 'menu_fnb')
-            .order('nama');
-
-        if (gatewayOutletCode) {
-            const outletId = await resolveOutletIdByCode(gatewayOutletCode);
-            menuQuery = menuQuery.eq('outlet_id', outletId);
-        }
-
-        const { data: menuItems } = await menuQuery.limit(60);
-
-        if (menuItems && menuItems.length > 0) {
-            const groupedMenu = menuItems.reduce((acc, item) => {
-                const cat = item.kategori?.nama || item.sub_kategori || 'LAINNYA';
-                if (!acc[cat]) acc[cat] = [];
-                acc[cat].push(`${item.nama} (Rp ${Number(item.harga_jual).toLocaleString('id-ID')})`);
-                return acc;
-            }, {});
-            menuContext = Object.entries(groupedMenu)
-                .map(([cat, items]) => `*Kategori ${cat}*:\n${items.join(', ')}`)
-                .join('\n\n');
-        }
-    } catch (err) {
-        console.error('[AIEngine] Gagal pre-fetch menu:', err.message);
-    }
+    // Jangan memasukkan seluruh katalog ke setiap prompt. Katalog, harga, dan
+    // ketersediaan bersifat live dan wajib diambil melalui get_menu_catalog.
+    const menuContext = '';
 
     // Pre-fetch info outlet (hanya toko publik, abaikan HO/Pusat)
     let outletContext = '';
@@ -170,7 +142,7 @@ ATURAN STRICT KATALOG REKOMENDASI (ZERO HARDCODE PRODUCT DATA):
 2. JIKA PELANGGAN MENANYAKAN MENU/REKOMENDASI/HARGA → GUNAKAN TOOL 'get_menu_catalog' ATAU BACA DARI DAFTAR KATALOG TERKINI DI BAWAH.
 3. DILARANG SEBUTKAN NAMA PRODUK ATAU HARGA YANG TIDAK ADA PADA REKAP KATALOG DI BAWAH / TOOL 'get_menu_catalog'. JIKA SEBUAH PRODUK TIDAK ADA PADA KATALOG (MISAL: CROFFLE ATAU PRODUK NON-AKTIF), DILARANG MEMBICARAKANNYA KEPADA PELANGGAN.
 
-KATALOG MENU RESMI CLECO PII (TERKINI):
+KATALOG MENU RESMI CLECO PII (LIVE - AMBIL DENGAN TOOL):
 ${menuContext || 'Gunakan tool get_menu_catalog untuk melihat daftar menu lengkap F&B.'}
 
 LOKASI, JAM OPERASIONAL & ATURAN DELIVERY CLECO PII:
@@ -1007,7 +979,15 @@ async function runWithGroq(systemPrompt, contextMessages, userMessage, sessionCo
  */
 async function processMessage({ userMessage, session, karyawanNama, onOrderCreated, onComplaintCreated }) {
     const systemPrompt = await buildSystemPrompt(session.user_role, karyawanNama);
-    const contextMessages = session.context_messages || [];
+    // Defense-in-depth: older sessions may still contain a larger history.
+    // Keep the provider prompt bounded even before the next session update.
+    const contextMessages = (session.context_messages || [])
+        .filter((message) => message && typeof message === 'object')
+        .slice(-8)
+        .map((message) => {
+            if (typeof message.content !== 'string' || message.content.length <= 1600) return message;
+            return { ...message, content: `${message.content.slice(0, 1600)}…` };
+        });
     const sessionContext = {
         sessionId: session.id,
         phoneNumber: session.phone_number,

@@ -40,6 +40,45 @@ let currentQR = null;
 let reachoutRestriction = null;
 let downloadMediaMessage = null;
 
+function getReachoutRestrictionResponse(error) {
+    const message = String(error?.message || error || '');
+    const restrictionActive = reachoutRestriction?.active === true;
+    if (!restrictionActive && !message.toLowerCase().includes('account_reachout_restricted')) {
+        return null;
+    }
+
+    const endsAt = reachoutRestriction?.enforcementEnds || null;
+    return {
+        status: 429,
+        body: {
+            code: 'account_reachout_restricted',
+            retryable: true,
+            enforcementEnds: endsAt,
+            error: endsAt
+                ? `WhatsApp sedang membatasi aksi akun. Coba lagi setelah ${endsAt}.`
+                : 'WhatsApp sedang membatasi aksi akun. Auto-join belum dapat dilakukan; coba lagi setelah pembatasan berakhir.',
+        },
+    };
+}
+
+async function resolveGroupJidFromInvite(inviteCode) {
+    try {
+        return await sock.groupAcceptInvite(inviteCode);
+    } catch (joinError) {
+        const message = String(joinError?.message || joinError || '').toLowerCase();
+        const restricted = reachoutRestriction?.active === true || message.includes('account_reachout_restricted');
+        if (!restricted) throw joinError;
+
+        // Jika akun sudah menjadi anggota, accept-invite dapat ditolak walaupun
+        // metadata grup masih bisa dibaca. Gunakan JID metadata tersebut.
+        const info = await sock.groupGetInviteInfo(inviteCode);
+        if (!info?.id) throw joinError;
+        await sock.groupMetadata(info.id);
+        console.log('[WA Gateway] Join ditolak karena restriction; memakai JID grup yang sudah terhubung:', info.id);
+        return info.id;
+    }
+}
+
 // ─── Helper: Format Nomor WA ─────────────────────────────────────────────────
 function formatWaNumber(target) {
     if (!target) return null;
@@ -60,7 +99,7 @@ async function sendGroupNotification(text) {
         if (!groupJid) {
             const inviteCode = await sessionManager.getGroupInviteCode();
             if (inviteCode) {
-                const joinedJid = await sock.groupAcceptInvite(inviteCode);
+                const joinedJid = await resolveGroupJidFromInvite(inviteCode);
                 if (joinedJid) {
                     groupJid = await sessionManager.setNotificationGroupJid(joinedJid);
                     console.log('[Notif] Grup notifikasi otomatis di-join saat alert:', groupJid);
@@ -573,7 +612,7 @@ async function connectToWhatsApp() {
             try {
                 const inviteCode = await sessionManager.getGroupInviteCode();
                 if (inviteCode) {
-                    const jid = await sock.groupAcceptInvite(inviteCode);
+                    const jid = await resolveGroupJidFromInvite(inviteCode);
                     console.log('[WA Gateway] Joined group via invite code dari wa_settings:', jid);
 
                     // Simpan JID hasil join ke wa_settings.notification_group secara otomatis
@@ -654,7 +693,7 @@ app.post('/send', async (req, res) => {
         if (target.includes('chat.whatsapp.com/')) {
             const code = target.split('chat.whatsapp.com/')[1].split('/')[0].split('?')[0].trim();
             try {
-                const joinedJid = await sock.groupAcceptInvite(code);
+                const joinedJid = await resolveGroupJidFromInvite(code);
                 if (joinedJid) {
                     formattedTarget = joinedJid;
                 } else {
@@ -884,7 +923,7 @@ app.post('/api/wa/join-group', async (req, res) => {
             inviteCode = inviteCode.split('chat.whatsapp.com/')[1].split('/')[0].split('?')[0].trim();
         }
 
-        const jid = await sock.groupAcceptInvite(inviteCode);
+        const jid = await resolveGroupJidFromInvite(inviteCode);
         if (!jid) {
             return res.status(400).json({ error: 'Gagal join group. Periksa invite code dan pastikan akun WA belum ada di group.' });
         }
@@ -900,6 +939,10 @@ app.post('/api/wa/join-group', async (req, res) => {
         });
     } catch (err) {
         console.error('[WA Gateway] /api/wa/join-group error:', err.message);
+        const restrictionResponse = getReachoutRestrictionResponse(err);
+        if (restrictionResponse) {
+            return res.status(restrictionResponse.status).json(restrictionResponse.body);
+        }
         return res.status(500).json({ error: err.message });
     }
 });
