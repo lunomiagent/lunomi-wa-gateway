@@ -23,6 +23,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+const authenticateToken = (req, res, next) => {
+    const requiredToken = process.env.WA_GATEWAY_API_TOKEN;
+    if (!requiredToken) {
+        return next();
+    }
+    const authHeader = req.headers['authorization'];
+    const token = (authHeader && authHeader.startsWith('Bearer '))
+        ? authHeader.substring(7)
+        : (req.headers['x-api-token'] || req.query.token);
+
+    if (token === requiredToken) {
+        return next();
+    }
+    console.warn(`[WA Gateway Security] Unauthorized request attempt to ${req.path}`);
+    return res.status(401).json({ error: 'Unauthorized: Invalid or missing WA Gateway API token' });
+};
+
 const PORT = process.env.PORT || 3001;
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -376,7 +393,7 @@ async function handleIncomingMessage(msg) {
         if (isKasirRequest) {
             const pauseMinutes = await sessionManager.getPauseDurationMinutes();
             await sessionManager.setAiPaused(session.id, pauseMinutes);
-            
+
             // Balasan hangat dan sangat natural seperti manusia (tanpa kode command kaku)
             const replyMsg = `Boleh banget Kak! Sebentar ya, aku panggilkan tim kasir kita yang lagi jaga di toko buat lanjut ngobrol langsung sama Kakak di sini 😊`;
             await safeSendReply(replyMsg);
@@ -405,7 +422,7 @@ async function handleIncomingMessage(msg) {
         }
 
         // Tandai "typing..." (mengetik indicator)
-        try { await sock.sendPresenceUpdate('composing', targetSendJid); } catch (_) {}
+        try { await sock.sendPresenceUpdate('composing', targetSendJid); } catch (_) { }
 
         // Ambil nama karyawan jika role staff
         let karyawanNama = null;
@@ -447,7 +464,7 @@ async function handleIncomingMessage(msg) {
             console.error('[CS-AI] AI Engine error:', aiErr.message);
             // Fallback response jika AI error total
             const fallbackText = 'Mohon maaf Kak, sistem kami sedang memproses data. Tim kasir kami akan segera membantu Kakak ya! 🙏';
-            try { await safeSendReply(fallbackText); } catch (_) {}
+            try { await safeSendReply(fallbackText); } catch (_) { }
             await sessionManager.logMessage({
                 sessionId: session.id,
                 phoneNumber,
@@ -459,14 +476,14 @@ async function handleIncomingMessage(msg) {
         }
 
         const replyText = aiResult.text || 'Maaf Kak, ada gangguan sementara. Coba lagi ya! 🙏';
-        
+
         // Simulasi waktu mengetik alami manusia (1.2 - 2.5 detik)
         const typingDelayMs = Math.min(2500, Math.max(1200, replyText.length * 12));
         await delay(typingDelayMs);
 
         // Hentikan typing indicator & kirim balasan AI
-        try { await sock.sendPresenceUpdate('paused', targetSendJid); } catch (_) {}
-        
+        try { await sock.sendPresenceUpdate('paused', targetSendJid); } catch (_) { }
+
         // Kirim balasan aman ke WhatsApp pelanggan
         let deliveryError = null;
         let mappingError = null;
@@ -574,7 +591,7 @@ async function connectToWhatsApp() {
                 console.log(`[WA Gateway] Outgoing message restriction lifted ${serialized}`);
             }
         }
-        
+
         if (qr) {
             currentQR = qr;
             console.log('\n============== PERHATIAN ==============');
@@ -677,14 +694,14 @@ function startWhatsAppConnection() {
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── Endpoint: Send (existing, preserved) ────────────────────────────────────
-app.post('/send', async (req, res) => {
+app.post('/send', authenticateToken, async (req, res) => {
     try {
         if (!isConnected || !sock) {
             return res.status(503).json({ error: 'WhatsApp Gateway belum siap / belum scan QR' });
         }
 
         const { target, message, imageUrl } = req.body;
-        
+
         if (!target || (!message && !imageUrl)) {
             return res.status(400).json({ error: 'Target dan konten (Message atau Image) tidak boleh kosong' });
         }
@@ -735,14 +752,14 @@ app.post('/send', async (req, res) => {
 
         let sentMsg;
         if (imageUrl) {
-            sentMsg = await sock.sendMessage(formattedTarget, { 
-                image: { url: imageUrl }, 
-                caption: message || '' 
+            sentMsg = await sock.sendMessage(formattedTarget, {
+                image: { url: imageUrl },
+                caption: message || ''
             });
         } else {
             sentMsg = await sock.sendMessage(formattedTarget, { text: message });
         }
-        
+
         console.log(`[WA Gateway] Pesan terkirim ke ${target}`, sentMsg?.key);
         return res.status(200).json({ success: true, message: `Berhasil mengirim ke ${target}`, key: sentMsg?.key });
 
@@ -753,14 +770,14 @@ app.post('/send', async (req, res) => {
 });
 
 // ─── Endpoint: Broadcast (existing, preserved) ───────────────────────────────
-app.post('/broadcast', async (req, res) => {
+app.post('/broadcast', authenticateToken, async (req, res) => {
     try {
         if (!isConnected || !sock) {
             return res.status(503).json({ error: 'WhatsApp Gateway belum siap / belum scan QR' });
         }
 
         const { targets, message } = req.body;
-        
+
         if (!targets || !Array.isArray(targets) || targets.length === 0 || !message) {
             return res.status(400).json({ error: 'Targets (array) atau Message tidak valid' });
         }
@@ -778,7 +795,7 @@ app.post('/broadcast', async (req, res) => {
                 formattedTarget = formattedTarget + '@s.whatsapp.net';
 
                 await sock.sendMessage(formattedTarget, { text: message });
-                console.log(`[WA Gateway Broadcast] ${i+1}/${targets.length} Terkirim ke ${target}`);
+                console.log(`[WA Gateway Broadcast] ${i + 1}/${targets.length} Terkirim ke ${target}`);
 
                 if (i < targets.length - 1) {
                     const randomDelay = Math.floor(Math.random() * (10000 - 5000 + 1)) + 5000;
