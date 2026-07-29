@@ -429,11 +429,14 @@ async function handleIncomingMessage(msg) {
 
         // Ambil nama karyawan jika role staff
         let karyawanNama = null;
-        if (session.karyawan_id) {
+        const verifiedKaryawanId = staffVerification?.verified && staffVerification?.isStaff
+            ? staffVerification.karyawanData?.karyawan_id
+            : null;
+        if (verifiedKaryawanId) {
             const { data: karyawan } = await supabase
                 .from('karyawan')
                 .select('nama')
-                .eq('karyawan_id', session.karyawan_id)
+                .eq('karyawan_id', verifiedKaryawanId)
                 .single();
             karyawanNama = karyawan?.nama || null;
         }

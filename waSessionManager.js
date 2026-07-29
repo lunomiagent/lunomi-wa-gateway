@@ -74,9 +74,10 @@ async function checkStaffRole(phoneNumber) {
 
         const { data, error } = await supabase
             .from('karyawan')
-            .select('karyawan_id, nama, no_hp, status, can_access_mobile, can_access_web')
+            .select('karyawan_id, nama, no_hp, status, employment_status, can_access_mobile, can_access_web')
             .or(`no_hp.eq.${withCountryCode},no_hp.eq.${withZero},no_hp.eq.${phoneNumber}`)
             .eq('status', 'aktif')
+            .in('employment_status', ['aktif', 'probation', 'cuti_panjang'])
             .limit(2);
 
         if (error) {

@@ -84,6 +84,9 @@ function classifyStaffVerification({ data, error }) {
     if (data.length === 0) {
         return { verified: true, isStaff: false, karyawanData: null };
     }
+    if (data.length !== 1) {
+        return { verified: false, isStaff: false, karyawanData: null };
+    }
     return { verified: true, isStaff: true, karyawanData: data[0] };
 }
 

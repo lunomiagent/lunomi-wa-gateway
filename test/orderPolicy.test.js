@@ -295,9 +295,9 @@ test('classifies bounded staff lookup results without treating ambiguity as cust
         data: [{ karyawan_id: 'staff-1' }, { karyawan_id: 'staff-2' }],
         error: null,
     }), {
-        verified: true,
-        isStaff: true,
-        karyawanData: { karyawan_id: 'staff-1' },
+        verified: false,
+        isStaff: false,
+        karyawanData: null,
     });
     assert.deepEqual(classifyStaffVerification({
         data: null,
