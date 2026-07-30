@@ -67,6 +67,30 @@ function sanitizeResponseForRole(responseText, userRole) {
     return text;
 }
 
+/**
+ * Ubah Markdown umum dari provider AI menjadi format native WhatsApp.
+ * WhatsApp memakai satu penanda di setiap sisi, bukan pasangan Markdown.
+ * Maksimal dua bagian tebal agar pesan tetap ringan dan mudah dipindai.
+ */
+function normalizeWhatsAppFormatting(responseText) {
+    let text = String(responseText || '')
+        .replace(/\*\*\*([^*\n]+?)\*\*\*/g, '*_$1_*')
+        .replace(/\*\*([^*\n]+?)\*\*/g, '*$1*')
+        .replace(/___([^_\n]+?)___/g, '_*$1*_')
+        .replace(/__([^_\n]+?)__/g, '_$1_')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/^[•●▪]\s*/gm, '- ')
+        .replace(/^\*\s+/gm, '- ');
+
+    let boldSpans = 0;
+    text = text.replace(/\*([^*\n]+?)\*/g, (_match, content) => {
+        boldSpans += 1;
+        return boldSpans <= 2 ? `*${content}*` : content;
+    });
+
+    return text;
+}
+
 // ─── Inisialisasi Gemini ─────────────────────────────────────────────────────
 let geminiClient = null;
 if (geminiApiKey) {
@@ -169,9 +193,10 @@ ATURAN KEAMANAN PEMESANAN:
 - Gunakan tool 'create_wa_order' hanya setelah balasan konfirmasi eksplisit tersebut. Harga dan total final selalu divalidasi sistem dari katalog.
 
 FORMATTING KETAT WHATSAPP (MINIMALIS & DILARANG BANYAK TANDA BINTANG '*'):
-- DILARANG KERAS menggunakan format tabel markdown (| Menu | Harga |), header markdown (##, ###, #), blockquote (>), atau garis beruntet (===, ---).
+- DILARANG KERAS menggunakan format tabel markdown (| Menu | Harga |), header markdown (##, ###, #), atau garis beruntet (===, ---).
 - ATURAN BOLD WHATSAPP: DILARANG menebalkan terlalu banyak kata dalam satu kalimat! Penggunaan tanda bintang (*) yang berlebihan membuat chat berantakan di HP pelanggan.
-- Gunakan cetak tebal (*teks*) SANGAT IRIT & MINIMALIS (MAKSIMAL 1-3 KALI DALAM 1 PESAN UTUH) — HANYA untuk Nama Produk Utama atau Total Harga.
+- WhatsApp memakai SATU penanda pada setiap sisi: *tebal*, _miring_, ~coret~, \`kode\`, > kutipan, - daftar, dan 1. daftar bernomor. DILARANG menggunakan format Markdown dua bintang seperti **teks**.
+- Gunakan cetak tebal (*teks*) SANGAT IRIT & MINIMALIS (MAKSIMAL 2 KALI DALAM 1 PESAN UTUH) — HANYA untuk Nama Produk Utama atau Total Harga.
 - Jangan pernah menebalkan kata biasa, kata sifat, pilihan opsi (seperti *dine-in*, *takeaway*, *GrabFood*, *nama*, *nomor WA*). Biarkan kalimat mengalir secara alami dan bersih tanpa bintang (*).
 
 BATASAN STRICT SYSTEM & KERAHASIAAN CLECO PII:
@@ -1013,7 +1038,9 @@ async function processMessage({ userMessage, session, karyawanNama, onOrderCreat
             const providerResult = await providerRunners[providerName]();
             return {
                 ...providerResult,
-                text: sanitizeResponseForRole(providerResult.text, session.user_role),
+                text: normalizeWhatsAppFormatting(
+                    sanitizeResponseForRole(providerResult.text, session.user_role)
+                ),
             };
         } catch (providerErr) {
             console.error(`[AIEngine] ${providerName} error, mencoba provider berikutnya:`, providerErr.message);
@@ -1034,5 +1061,6 @@ module.exports = {
     processMessage,
     buildSystemPrompt,
     getProviderOrder,
+    normalizeWhatsAppFormatting,
     sanitizeResponseForRole,
 };

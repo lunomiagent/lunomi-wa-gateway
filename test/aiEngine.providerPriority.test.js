@@ -6,6 +6,7 @@ process.env.SUPABASE_KEY = process.env.SUPABASE_KEY || 'test-key';
 
 const {
     getProviderOrder,
+    normalizeWhatsAppFormatting,
     sanitizeResponseForRole,
 } = require('../aiEngine');
 
@@ -60,4 +61,40 @@ test('internal staff responses are not altered by the customer safety filter', (
     const internalResponse = 'Omset harian outlet CP adalah Rp 1.000.000.';
     assert.equal(sanitizeResponseForRole(internalResponse, 'staff'), internalResponse);
     assert.equal(sanitizeResponseForRole(internalResponse, 'owner'), internalResponse);
+});
+
+test('normalizes markdown emphasis to WhatsApp syntax without visible extra stars', () => {
+    const normalized = normalizeWhatsAppFormatting([
+        '**HPP Americano**',
+        '**Harga Jual:** Rp 22.000',
+        '**Bahan Baku:**',
+        '• Houseblend 19 gram',
+    ].join('\n'));
+
+    assert.equal(normalized, [
+        '*HPP Americano*',
+        '*Harga Jual:* Rp 22.000',
+        'Bahan Baku:',
+        '- Houseblend 19 gram',
+    ].join('\n'));
+});
+
+test('preserves supported WhatsApp styles and limits bold emphasis to two spans', () => {
+    const normalized = normalizeWhatsAppFormatting([
+        '*Judul*',
+        '_Catatan_',
+        '~Tidak tersedia~',
+        '> Kutipan pelanggan',
+        '`kode`',
+        '*Total*',
+        '*Label berlebih*',
+    ].join('\n'));
+
+    assert.match(normalized, /\*Judul\*/);
+    assert.match(normalized, /_Catatan_/);
+    assert.match(normalized, /~Tidak tersedia~/);
+    assert.match(normalized, /> Kutipan pelanggan/);
+    assert.match(normalized, /`kode`/);
+    assert.match(normalized, /\*Total\*/);
+    assert.doesNotMatch(normalized, /\*Label berlebih\*/);
 });
