@@ -748,6 +748,21 @@ app.post('/send', authenticateToken, async (req, res) => {
             formattedTarget = digits + '@s.whatsapp.net';
         }
 
+        if (formattedTarget.endsWith('@s.whatsapp.net')) {
+            try {
+                // Fix for iOS Baileys delivery issue (Waiting for this message...)
+                // Force sync session state and verify number existence
+                const [waRes] = await sock.onWhatsApp(formattedTarget);
+                if (waRes && waRes.exists) {
+                    formattedTarget = waRes.jid; // Update to actual JID (sometimes resolves LID)
+                }
+                await sock.presenceSubscribe(formattedTarget);
+                await delay(300);
+            } catch (e) {
+                console.log('[WA Gateway Sync Note]:', e.message);
+            }
+        }
+
         if (formattedTarget.endsWith('@g.us')) {
             try {
                 await sock.groupMetadata(formattedTarget);
@@ -803,6 +818,17 @@ app.post('/broadcast', authenticateToken, async (req, res) => {
                     formattedTarget = '62' + formattedTarget.substring(1);
                 }
                 formattedTarget = formattedTarget + '@s.whatsapp.net';
+
+                try {
+                    const [waRes] = await sock.onWhatsApp(formattedTarget);
+                    if (waRes && waRes.exists) {
+                        formattedTarget = waRes.jid; 
+                    }
+                    await sock.presenceSubscribe(formattedTarget);
+                    await delay(300);
+                } catch (e) {
+                    console.log('[WA Gateway Broadcast Sync Note]:', e.message);
+                }
 
                 const sentMsg = await sock.sendMessage(formattedTarget, { text: message });
                 if (sentMsg?.key?.id) {
