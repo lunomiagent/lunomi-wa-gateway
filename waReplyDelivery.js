@@ -1,14 +1,12 @@
 function normalizePhoneJid(jid) {
     if (!jid) return null;
-    if (jid.endsWith('@s.whatsapp.net')) return jid;
-    if (jid.includes('@')) return null;
-    return `${jid}@s.whatsapp.net`;
+    let raw = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '').trim();
+    if (raw.startsWith('0')) raw = '62' + raw.substring(1);
+    if (!raw) return null;
+    return `${raw}@s.whatsapp.net`;
 }
 
 function resolveFallbackJid(key, primaryJid) {
-    const candidates = [
-        key?.senderPn,
-        key?.remoteJidAlt,
         key?.participantAlt,
     ];
 
