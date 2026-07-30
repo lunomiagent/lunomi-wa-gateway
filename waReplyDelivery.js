@@ -62,7 +62,7 @@ async function sendReplyToInboundChat({ sock, msg, text }) {
     }
 
     const mapping = await storeInboundLidMapping(sock, msg.key);
-    const primaryOptions = primaryJid.endsWith('@lid') ? {} : { quoted: msg };
+    const primaryOptions = {}; // DISABLE QUOTE TO FIX IPHONE DROP
 
     try {
         const message = await sock.sendMessage(
