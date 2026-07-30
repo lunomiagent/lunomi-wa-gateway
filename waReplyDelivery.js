@@ -7,6 +7,9 @@ function normalizePhoneJid(jid) {
 }
 
 function resolveFallbackJid(key, primaryJid) {
+    const candidates = [
+        key?.senderPn,
+        key?.remoteJidAlt,
         key?.participantAlt,
     ];
 
