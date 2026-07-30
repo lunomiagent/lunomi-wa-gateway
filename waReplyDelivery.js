@@ -1,6 +1,7 @@
 function normalizePhoneJid(jid) {
     if (!jid) return null;
     let raw = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace('@lid', '').trim();
+    raw = raw.split(':')[0];
     if (raw.startsWith('0')) raw = '62' + raw.substring(1);
     if (!raw) return null;
     return `${raw}@s.whatsapp.net`;
@@ -47,9 +48,17 @@ function preserveMappingError(error, mappingError) {
 }
 
 async function sendReplyToInboundChat({ sock, msg, text }) {
-    const primaryJid = msg?.key?.remoteJid;
+    let primaryJid = msg?.key?.remoteJid;
     if (!primaryJid) {
         throw new Error('Cannot send WhatsApp reply without an inbound remoteJid');
+    }
+
+    if (primaryJid.endsWith('@s.whatsapp.net')) {
+        let raw = primaryJid.replace('@s.whatsapp.net', '').split(':')[0].trim();
+        if (raw.startsWith('0')) {
+            raw = '62' + raw.substring(1);
+        }
+        primaryJid = `${raw}@s.whatsapp.net`;
     }
 
     const mapping = await storeInboundLidMapping(sock, msg.key);
