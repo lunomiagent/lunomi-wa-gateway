@@ -766,6 +766,10 @@ app.post('/send', authenticateToken, async (req, res) => {
             sentMsg = await sock.sendMessage(formattedTarget, { text: message });
         }
 
+        if (sentMsg?.key?.id) {
+            botSentMessageIds.add(sentMsg.key.id);
+        }
+
         console.log(`[WA Gateway] Pesan terkirim ke ${target}`, sentMsg?.key);
         return res.status(200).json({ success: true, message: `Berhasil mengirim ke ${target}`, key: sentMsg?.key });
 
