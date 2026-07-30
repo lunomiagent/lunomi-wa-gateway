@@ -800,7 +800,10 @@ app.post('/broadcast', authenticateToken, async (req, res) => {
                 }
                 formattedTarget = formattedTarget + '@s.whatsapp.net';
 
-                await sock.sendMessage(formattedTarget, { text: message });
+                const sentMsg = await sock.sendMessage(formattedTarget, { text: message });
+                if (sentMsg?.key?.id) {
+                    botSentMessageIds.add(sentMsg.key.id);
+                }
                 console.log(`[WA Gateway Broadcast] ${i + 1}/${targets.length} Terkirim ke ${target}`);
 
                 if (i < targets.length - 1) {
