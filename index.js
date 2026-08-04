@@ -16,6 +16,10 @@ const {
     detectBusinessCommitmentRisk,
     formatBusinessCommitmentNotification,
 } = require('./notificationPolicy');
+const {
+    classifyDisconnect,
+    resetWhatsAppSession,
+} = require('./sessionRecovery');
 
 const cors = require('cors');
 
@@ -40,6 +44,15 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing WA Gateway API token' });
 };
 
+const requireConfiguredGatewayToken = (req, res, next) => {
+    if (!process.env.WA_GATEWAY_API_TOKEN) {
+        return res.status(503).json({
+            error: 'WA_GATEWAY_API_TOKEN belum dikonfigurasi di gateway.',
+        });
+    }
+    return authenticateToken(req, res, next);
+};
+
 const PORT = process.env.PORT || 3001;
 
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -56,6 +69,37 @@ let isConnected = false;
 let currentQR = null;
 let reachoutRestriction = null;
 let downloadMediaMessage = null;
+let clearCurrentSession = null;
+let reconnectTimer = null;
+let connectionStartInFlight = false;
+let manualResetInProgress = false;
+
+function scheduleWhatsAppReconnect(delayMs) {
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        startWhatsAppConnection();
+    }, delayMs);
+}
+
+function closeCurrentSocket() {
+    const activeSocket = sock;
+    sock = null;
+    isConnected = false;
+    currentQR = null;
+
+    if (!activeSocket) return;
+
+    try {
+        if (typeof activeSocket.end === 'function') {
+            activeSocket.end(new Error('WhatsApp session reset requested'));
+        } else if (activeSocket.ws && typeof activeSocket.ws.close === 'function') {
+            activeSocket.ws.close();
+        }
+    } catch (error) {
+        console.warn('[WA Gateway] Gagal menutup socket WhatsApp lama:', error.message);
+    }
+}
 
 function getReachoutRestrictionResponse(error) {
     const message = String(error?.message || error || '');
@@ -564,7 +608,8 @@ async function connectToWhatsApp() {
         downloadMediaMessage: baileysDownloadMediaMessage,
     } = await loadBaileys();
     downloadMediaMessage = baileysDownloadMediaMessage;
-    const { state, saveCreds } = await useSupabaseAuthState(supabase);
+    const { state, saveCreds, clearSession } = await useSupabaseAuthState(supabase);
+    clearCurrentSession = clearSession;
     const { version, isLatest } = await fetchLatestBaileysVersion();
     console.log(`[WA] Memakai versi v${version.join('.')}, isLatest: ${isLatest}`);
 
@@ -609,8 +654,8 @@ async function connectToWhatsApp() {
 
         if (connection === 'close') {
             const statusCode = (lastDisconnect?.error)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             const isConflict = statusCode === 440 || lastDisconnect?.error?.message?.includes('conflict');
+            const recovery = classifyDisconnect(statusCode, DisconnectReason);
 
             if (isConflict) {
                 console.log('[WA Gateway] Terdeteksi Session Conflict / Dual Deployment (statusCode 440). Menunggu instance lain termination (5s)...');
@@ -619,10 +664,22 @@ async function connectToWhatsApp() {
             }
 
             isConnected = false;
-            if (shouldReconnect) {
-                setTimeout(startWhatsAppConnection, isConflict ? 5000 : 3000);
+            if (manualResetInProgress) {
+                manualResetInProgress = false;
+                console.log('[WA Gateway] Reset manual selesai. Menyiapkan QR untuk akun WhatsApp baru.');
+                scheduleWhatsAppReconnect(500);
+            } else if (recovery.shouldClearSession) {
+                try {
+                    await clearSession();
+                    currentQR = null;
+                    console.log('[WA Gateway] Sesi logout dihapus. Menyiapkan QR baru untuk relink.');
+                    scheduleWhatsAppReconnect(recovery.reconnectDelayMs);
+                } catch (error) {
+                    console.error('[WA Gateway] Gagal menghapus sesi setelah logout:', error.message);
+                    scheduleWhatsAppReconnect(5000);
+                }
             } else {
-                console.error('[WA Gateway] Sesi berstatus loggedOut. Data sesi dipertahankan; lakukan reset/relink eksplisit untuk mendapat QR baru.');
+                scheduleWhatsAppReconnect(recovery.reconnectDelayMs);
             }
         } else if (connection === 'open') {
             isConnected = true;
@@ -690,9 +747,14 @@ async function connectToWhatsApp() {
 }
 
 function startWhatsAppConnection() {
+    if (connectionStartInFlight || isConnected) return;
+
+    connectionStartInFlight = true;
     connectToWhatsApp().catch((error) => {
         isConnected = false;
         console.error('[WA Gateway] Gagal memulai koneksi WhatsApp:', error);
+    }).finally(() => {
+        connectionStartInFlight = false;
     });
 }
 
@@ -1000,6 +1062,49 @@ app.post('/api/wa/join-group', async (req, res) => {
             return res.status(restrictionResponse.status).json(restrictionResponse.body);
         }
         return res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * POST /api/wa/reset-session
+ * Hapus kredensial WhatsApp lama dan siapkan QR untuk akun baru.
+ * Endpoint ini dipakai oleh Lunomi Web melalui server proxy terautentikasi.
+ */
+app.post('/api/wa/reset-session', requireConfiguredGatewayToken, async (_req, res) => {
+    if (manualResetInProgress) {
+        return res.status(409).json({
+            error: 'Reset sesi WhatsApp sedang diproses. Tunggu QR baru muncul.',
+        });
+    }
+
+    if (connectionStartInFlight && !clearCurrentSession) {
+        return res.status(503).json({
+            error: 'Gateway sedang menyiapkan sesi WhatsApp. Coba lagi beberapa detik.',
+        });
+    }
+
+    if (!clearCurrentSession) {
+        return res.status(503).json({
+            error: 'Sesi WhatsApp belum siap untuk direset.',
+        });
+    }
+
+    manualResetInProgress = true;
+    try {
+        await resetWhatsAppSession({
+            clearSession: clearCurrentSession,
+            closeSocket: closeCurrentSocket,
+            scheduleReconnect: scheduleWhatsAppReconnect,
+        });
+
+        return res.json({
+            success: true,
+            message: 'Sesi WhatsApp lama dihapus. QR akun baru sedang disiapkan.',
+        });
+    } catch (error) {
+        manualResetInProgress = false;
+        console.error('[WA Gateway] Gagal reset sesi WhatsApp:', error.message);
+        return res.status(500).json({ error: 'Gagal menghapus sesi WhatsApp lama.' });
     }
 });
 

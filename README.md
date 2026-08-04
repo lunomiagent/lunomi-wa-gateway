@@ -68,6 +68,7 @@ Endpoint operasional:
 | `POST /api/wa/pause` / `resume` | Menjeda atau mengaktifkan CS AI. |
 | `GET` / `POST /api/wa/settings` | Membaca atau memperbarui pengaturan WA. |
 | `POST /api/wa/join-group` | Bergabung ke grup notifikasi dari invite code yang tersimpan. |
+| `POST /api/wa/reset-session` | Menghapus sesi WhatsApp lama dan menyiapkan QR untuk akun baru. Memerlukan `WA_GATEWAY_API_TOKEN`. |
 
 ### Notifikasi grup dan human takeover
 
@@ -99,12 +100,18 @@ kode saat ini; nilai aktual harus disimpan di Render atau file `.env` lokal.
 | `GROQ_MODEL` | Opsional | Model Groq; default `llama-3.3-70b-versatile`. |
 | `WA_DELIVERY_RECEIPT_TIMEOUT_MS` | Opsional | Batas tunggu receipt pengiriman dalam milidetik; default `30000`. |
 | `WA_CUSTOMER_OUTLET_CODE` | Ya di produksi | Scope outlet seluruh tool pada gateway WA; untuk service ini wajib `CP` (Cleco Pii). |
+| `WA_GATEWAY_API_TOKEN` | Ya untuk reset sesi | Token yang sama di gateway dan Lunomi Web untuk mengganti akun WhatsApp dari menu pengaturan. |
 | `DEFAULT_WA_PHONE` | Opsional | Nomor pemilik/default untuk konteks sesi. |
 | `PORT` | Platform | Port HTTP; default lokal `3001`. Render mengaturnya sesuai service. |
 | `CRON_SECRET` | Ya di produksi | Secret yang **sama** dengan aplikasi Lunomi Web untuk endpoint cron. Jangan menuliskan nilainya di kode atau dokumentasi. |
 
 Setelah mengubah environment variable di Render, lakukan deploy/restart service
 agar proses Node membaca nilai yang baru.
+
+Saat akun WhatsApp logout dari HP, gateway menghapus kredensial sesi lama secara
+otomatis lalu menyiapkan QR baru. Operator OM atau COO juga dapat memakai tombol
+`Ganti Akun WhatsApp` di Lunomi Web. Tombol ini memutus sesi lama dan membuat QR
+untuk akun pengganti tanpa menghapus data pelanggan, chat, atau pengaturan Lunomi.
 
 ## Urutan provider AI dan perilaku CS
 
